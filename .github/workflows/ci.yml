@@ -48,7 +48,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - uses: ./.github/actions/cau-env
 
@@ -74,7 +74,7 @@ jobs:
     # reach that budget or a slow runner fails a green tree.
     timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - uses: ./.github/actions/cau-env
 
@@ -86,7 +86,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - uses: ./.github/actions/cau-env
 
@@ -110,7 +110,7 @@ jobs:
       # the failure, so a reviewer should never have to re-run the job to get it.
       - name: Publish the gate reports
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: eval-and-coverage
           path: |
@@ -130,7 +130,7 @@ jobs:
       # the tree is a review item instead of an artifact nobody opens.
       security-events: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - uses: ./.github/actions/cau-env
 
@@ -146,14 +146,14 @@ jobs:
         # The guard matters: if the scan step died there is no SARIF to upload,
         # and code scanning keeps the last good set rather than being wiped.
         if: always() && hashFiles('cau.sarif') != ''
-        uses: github/codeql-action/upload-sarif@v3
+        uses: github/codeql-action/upload-sarif@v4
         with:
           sarif_file: cau.sarif
           category: cau-self-scan
 
       - name: Publish the self-scan reports
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: self-scan
           path: |
@@ -165,7 +165,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - uses: ./.github/actions/cau-env
 
@@ -182,7 +182,7 @@ jobs:
 
       - name: Publish the crasher it found
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: fuzz-crashers
           path: |
@@ -205,7 +205,7 @@ jobs:
       # Published as a release asset and used to self-verify before publishing.
       CAU_RELEASE_PUBLIC_KEY: ${{ vars.CAU_RELEASE_PUBLIC_KEY }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - uses: ./.github/actions/cau-env
 
@@ -313,7 +313,7 @@ jobs:
           ./cau verify-self --from dist --pubkey dist/release-pubkey.hex \
             --name "cau-${GITHUB_REF_NAME}-linux-amd64"
 
-      - uses: softprops/action-gh-release@v2
+      - uses: softprops/action-gh-release@v3
         with:
           files: dist/*
           fail_on_unmatched_files: true
