@@ -22,6 +22,6 @@ pkgbase = cau
 	backup = etc/logrotate.d/cau
 	backup = etc/cau/cau.conf
 	source = https://github.com/s-b-repo/cau/releases/download/v0.3.0/cau-0.3.0.tar.gz
-	sha256sums = dd81ae94cd4ee4bb6864033b86cb2c2c3958e614f76d90d96f581d127b98541e
+	sha256sums = d709870be8b3d45a32f1ddc44a09de033f9559b6b0e5fc49eaed62ed5701356d
 
 pkgname = cau
