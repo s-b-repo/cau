@@ -75,8 +75,8 @@ jobs:
       #
       # It runs from a copy: the proof must not dirty the tree the binary build
       # reads, and dpkg-source -b folds anything loose (a stray binary, a scan
-      # report, a nested repo's .git) into the generated orig tarball or aborts
-      # on it, so the copy carries only what a packager would publish.
+      # report, a nested repo's .git) into the orig tarball or aborts on it, so
+      # the copy carries only what a packager would publish.
       - name: Prove the Debian source package builds (from a copy of the tree)
         if: ${{ github.event_name != 'pull_request' && !startsWith(github.ref, 'refs/tags/v') }}
         # Bounded, and failing the job: without a cap a wedged dpkg-source holds
@@ -88,11 +88,9 @@ jobs:
           stage=$(mktemp -d)
           trap 'rm -rf "$stage"' EXIT
           mkdir -p "$stage/cau"
-          # dpkg-source generates the orig tarball itself (there is no upstream
-          # release for a branch tip), so the exclusions below are about what
-          # belongs in that tarball, not about fetching one: the tree's own
-          # .gitignore build products, the nested cau-kernel repo, and the
-          # untracked local WIP paths.
+          # The exclusions below are about what belongs in the tarball: the
+          # tree's own .gitignore build products, the nested cau-kernel repo,
+          # and the untracked local WIP paths.
           tar -C "$GITHUB_WORKSPACE" \
             --exclude=./.git \
             --exclude=./dist \
@@ -108,6 +106,17 @@ jobs:
             --exclude='*.build' --exclude='*.buildinfo' --exclude='*.changes' \
             -cf - . | tar -xf - -C "$stage/cau"
           cd "$stage/cau"
+          # A 3.0 (quilt) source build needs the upstream tarball to exist:
+          # dpkg-source does not generate it, it diffs the tree against it and
+          # aborts if the two differ. A tag fetches the tarball from the
+          # release; a branch has no release, so it is built from the tree
+          # that is about to be packaged, minus debian/, which is what
+          # "upstream" means in this format. The same tree on both sides is
+          # what makes the diff come out clean.
+          upver=$(dpkg-parsechangelog -SVersion | sed 's/-[^-]*$//')
+          tar -C "$stage/cau" --exclude=./debian \
+            --transform "s|^\./|cau-${upver}/|" \
+            -czf "$stage/cau_${upver}.orig.tar.gz" .
           dpkg-buildpackage -us -uc -S
           ls -l "$stage"
 
