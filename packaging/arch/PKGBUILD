@@ -38,7 +38,7 @@ source=("https://github.com/s-b-repo/cau/releases/download/v${pkgver}/${pkgname}
 # same runner image produces the same bytes for the same source. Refresh it with
 # updpkgsums or by hashing the published asset after a new tag (see
 # docs/packaging.md).
-sha256sums=('dd81ae94cd4ee4bb6864033b86cb2c2c3958e614f76d90d96f581d127b98541e')
+sha256sums=('ca93e6c55eb722f106f608de93a0eed8a2a694b311e6a858e2531d0c6ea88aca')
 
 build() {
     cd "${srcdir}/${pkgname}-${pkgver}"
