@@ -1,6 +1,6 @@
 # Maintainer: Stephan Botes <stephanbotes0@gmail.com>
 pkgname=cau
-pkgver=0.3.0
+pkgver=0.3.1
 pkgrel=1
 # The package's compression is the recipe's decision, not the builder's: the
 # arm64 image's makepkg defaults to xz while the amd64 one defaults to zstd,

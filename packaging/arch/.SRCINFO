@@ -1,6 +1,6 @@
 pkgbase = cau
 	pkgdesc = transparent open-source malware detection engine: explained verdicts, labeled classes, ATT&CK techniques
-	pkgver = 0.3.0
+	pkgver = 0.3.1
 	pkgrel = 1
 	url = https://github.com/s-b-repo/cau
 	arch = x86_64
@@ -21,7 +21,7 @@ pkgbase = cau
 	provides = cau-edr
 	backup = etc/logrotate.d/cau
 	backup = etc/cau/cau.conf
-	source = https://github.com/s-b-repo/cau/releases/download/v0.3.0/cau-0.3.0.tar.gz
+	source = https://github.com/s-b-repo/cau/releases/download/v0.3.1/cau-0.3.1.tar.gz
 	sha256sums = dd81ae94cd4ee4bb6864033b86cb2c2c3958e614f76d90d96f581d127b98541e
 
 pkgname = cau

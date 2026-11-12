@@ -5,6 +5,8 @@ All notable changes to CAU EDR. The format follows
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-11-12
+
 ### More recall, from behaviour rather than from names
 
 The lab corpus's misses were read one class at a time and the detection content

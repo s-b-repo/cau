@@ -1,3 +1,32 @@
+cau (0.3.1-1) unstable; urgency=medium
+
+  * New upstream release v0.3.1.
+  * More recall from behaviour rather than from names: the lab dev split goes
+    from 166 of 222 (74.8 %) to 194 of 222 (87.4 %), and the held-out split,
+    which shares no tool with the split the content was written against, from
+    171 of 280 (61.1 %) to 179 of 280 (63.9 %).
+  * Web shells that fetch rather than execute are found: a page that parses a
+    request value as a URL, fetches it and streams the body back is a proxy
+    into the server's network, in PHP or through a classic-ASP XMLHTTP object.
+  * Windows script behaviour with no ordinary use is its own eight-point class
+    each: a command name assembled from characters of unrelated strings, a
+    command carried in variables whose names are punctuation, a script whose
+    node types are named so it can rewrite the syntax tree, a WMI event
+    consumer, a handler planted for an auto-elevating binary, a password list
+    walked against a logon interface, a shell command file whose icon is on a
+    remote share, a boot sector written to a physical drive.
+  * Packed credential dumpers are read through the import table the packer
+    kept: the credential stores' own libraries, and the credential-store APIs
+    that survived in the function list.
+  * Living off the land: a signed Windows binary with no business being handed
+    a URL, the variable that says where Windows is found redirected before a
+    program is run, the NTDS.dit directory database backed up.
+  * False positives are where they were: 3 of 2,368 benign files on the dev
+    split, 6 of 2,398 on the held-out split, and 38 of 24,999 on the wide
+    benign sweep.
+
+ -- Stephan Botes <stephanbotes0@gmail.com>  Thu, 12 Nov 2026 12:45:00 +0200
+
 cau (0.3.0-1) unstable; urgency=medium
 
   * New upstream release v0.3.0.
