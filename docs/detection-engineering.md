@@ -41,6 +41,30 @@ Navigator layer in grey and as SARIF warnings rather than left blank, which
 is the DETT&CT principle of scoring visibility honestly instead of implying
 coverage.
 
+## The content behind the matrix
+
+`cau coverage` reports the matrix; the content it is derived from is this:
+
+| Source | Entries | Source | Entries |
+|---|---|---|---|
+| `static` | 83 | `lnk` | 11 |
+| `tradecraft` | 99 | `pdf` | 9 |
+| `heuristic` | 33 | `yara` | 8 |
+| `linuxpkg` | 32 | `stego` | 6 |
+| `archive` | 23 | `iso` | 6 |
+| `ole` | 14 | `peeler` | 6 |
+| `hash` | 11 | `encchain` | 4 |
+| | | `chm` | 4 |
+| | | `uefi` | 3 |
+| | | `similarity` | 3 |
+
+**355 entries in total.** They map to **95 ATT&CK techniques with content** —
+92 covered and 3 partial (T1057, T1082, T1564.001) — with **0 declared gaps**
+and 22 entries carrying content that maps to no technique. `cau honesty`
+reports the same three numbers in the same words, and the expectation file
+`baselines/attack-coverage.txt` carries one row per technique, which CI
+compares against the content on every push.
+
 ## Where each detector sits on the Pyramid of Pain
 
 | Source | Level | Why |

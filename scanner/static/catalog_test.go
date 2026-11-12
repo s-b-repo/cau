@@ -33,6 +33,7 @@ func TestClassCatalogMatchesSource(t *testing.T) {
 		"techPreload": techPreload, "techRootkit": techRootkit, `""`: "",
 		"CatPersist": CatPersist, "techNativeAPI": techNativeAPI, "techSSHKeys": techSSHKeys, "techCron": techCron,
 		"techSystemdUnit": techSystemdUnit, "techAutostart": techAutostart,
+		"techCredDump": techCredDump,
 	}
 
 	// add("class", Cat, score, tech, ...) and Anomaly{Class: "class", Category: Cat, Score: n, ...}.
@@ -41,7 +42,7 @@ func TestClassCatalogMatchesSource(t *testing.T) {
 
 	seen := map[string]bool{}
 	check := func(file, class, cat, weight, tech string) {
-		if strings.HasPrefix(class, "packer.") && class != "packer.generic" && class != "packer.installer-stub" {
+		if strings.HasPrefix(class, "packer.") && class != "packer.generic" && class != "packer.installer-stub" && class != "packer.credential-imports" {
 			class = "packer.*"
 		}
 		seen[class] = true

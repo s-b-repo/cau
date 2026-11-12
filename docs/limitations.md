@@ -24,13 +24,14 @@ exists so the demonstration can be measured.
 |---|---|---|
 | Heuristics | debuggers and injection-capable developer tools (OllyDbg scores 11); on Linux, `sudo` imports `ptrace` and the `process_vm_*` pair for its intercept feature and scores 6 | 28 of 349 files in the Kali Windows tool set score at or above 7, almost all of them offensive tools shipped on purpose; 1 of 4,729 ELF files gains a heuristic detection from its import table and that one is a Kali-shipped offensive tool |
 | Static (PE) | none above the threshold on the tool set; packed benign tools render as low suspicion with the packer named | `wget.exe` 7/8, `klogger.exe` 6/8 |
-| Static (ELF) | launcher stubs with three or fewer substantive imports (`node`, `gvpr`, `selinuxenabled`); vendor executable sections with non-compiler names (libGL `wtext`, absl `malloc_hook`); one old build with an executable stack; one archiver with an appended data block. Sanitizer runtimes, `libeatmydata` and sudo's noexec shims are named as known libc interposers and not scored | 21 of 4,974 ELF files under Kali's `/usr/bin`, `/usr/sbin`, `/usr/lib/x86_64-linux-gnu`, `/usr/libexec` and `/usr/lib/systemd` carry one weight-1 observation; 0 reach the threshold; 40 of 40 signed kernel modules score 0; a UPX-packed `ls` scores 6/8 |
-| Static (ELF, deep resolution) | the relocation-resolved `.init_array`, symbol-version and raw-syscall-interposer rules add information, not weight, on ordinary software: a normal PIE's constructors resolve into `.text`, a libc build is named as a known interposer, and symbol versions are informational | no benign ELF in the local test corpus crosses the threshold from these rules; a full re-measurement against the 4,974-file set is pending (it is the same open item as every number here) |
+| Static (ELF) | launcher stubs with three or fewer substantive imports (`node`, `gvpr`, `selinuxenabled`); vendor executable sections with non-compiler names (libGL `wtext`, absl `malloc_hook`); one old build with an executable stack; one archiver with an appended data block. Sanitizer runtimes, `libeatmydata` and sudo's noexec shims are named as known libc interposers and not scored | 21 of 4,999 ELF files under Kali's `/usr/bin`, `/usr/sbin`, `/usr/lib/x86_64-linux-gnu`, `/usr/libexec` and `/usr/lib/systemd` carry one weight-1 observation; 0 reach the threshold; 40 of 40 signed kernel modules score 0; a UPX-packed `ls` scores 6/8 |
+| Static (ELF, deep resolution) | the relocation-resolved `.init_array`, symbol-version and raw-syscall-interposer rules add information, not weight, on ordinary software: a normal PIE's constructors resolve into `.text`, a libc build is named as a known interposer, and symbol versions are informational | no benign ELF in the local test corpus crosses the threshold from these rules; a full re-measurement against the 4,999-file set is pending (it is the same open item as every number here) |
 | Static (Mach-O) | measurement pending — the Mach-O pass is new and no macOS corpus has been scanned on the development host. `unsigned` and `signature-unverified` are informational (weight 0), and `encrypted` is weight-1 with the FairPlay-vs-protector ambiguity stated in its detail | 0 measured; a macOS package-set scan is required before a field number can be published |
-| Stego | a stray ZERO WIDTH SPACE pasted into documentation or a translation file; source files that enumerate Unicode categories (regular-expression libraries, identifier tables); a stray byte-order mark mid-file | 70 of 70,102 benign text artifacts (0.10 %) |
+| Stego | a stray ZERO WIDTH SPACE pasted into documentation or a translation file; source files that enumerate Unicode categories (regular-expression libraries, identifier tables); a stray byte-order mark mid-file | 69 of 70,200 benign text artifacts (0.10 %) |
 | Fusion | none observed; the conditional chains each require two independent detectors, so a chain's false-positive surface is the intersection of two error modes, not their union | 0 fused-only detections on the tool set; chain rules measured against the same set show no benign tool escalated by a chain alone |
-| Tradecraft | documentation and example scripts that really are shells (`socat`, WireGuard and netcat examples under `/usr/share/doc`); offensive tools' own package files. GTFOBins shapes stay quiet on plain `sudo sh -c`, `ssh -p 22`, `chmod 4755` and `find -exec sh -c`, because the vectors require the breakout-specific escape syntax. The SaaS-C2 host class scores 3 (corroborating only), so a legitimate Microsoft Graph / Firebase / OpenAI / Anthropic integration never crosses threshold on the host alone; the abusable-path class (score 5) needs a second finding or a verbose file to detect. The bypass pass requires a pairing, so `memfd_create` for shared memory, `prctl(PR_SET_NAME)` in a Go binary, a `dns.resolver` TXT read for SPF and an integrity checker reading `/etc/ld.so.preload` all stay quiet. `tradecraft.script.*` is measured on a Linux host only, so its rate on Windows admin scripts is unknown | 4 of 25,000 benign files in the wide sweep, all genuine offensive material shipped by Kali packages; 3 of 2,431 in heldout, not inspected by rule. `make eval` on the shipped corpus: FPs 0 → 0 after the GTFOBins, LOLBAS, LOLC2, LOLFSaaS and ArcticFox-bypass expansions |
-| Encoded executable | embedded encoded binaries in security tooling and exploit docs (impacket, lsassy, nxc, metasploit) — genuine encoded executables, flagged as designed | 32 of 159,339 benign files (0.020 %) |
+| Tradecraft | documentation and example scripts that really are shells (`socat`, WireGuard and netcat examples under `/usr/share/doc`); offensive tools' own package files. GTFOBins shapes stay quiet on plain `sudo sh -c`, `ssh -p 22`, `chmod 4755` and `find -exec sh -c`, because the vectors require the breakout-specific escape syntax. The SaaS-C2 host class scores 3 (corroborating only), so a legitimate Microsoft Graph / Firebase / OpenAI / Anthropic integration never crosses threshold on the host alone; the abusable-path class (score 5) needs a second finding or a verbose file to detect. The bypass pass requires a pairing, so `memfd_create` for shared memory, `prctl(PR_SET_NAME)` in a Go binary, a `dns.resolver` TXT read for SPF and an integrity checker reading `/etc/ld.so.preload` all stay quiet. The newly added classes are the same kind of narrow: the command-assembly class needs its parts to sit within one window of each other, so a logger that truncates a line with `Substring(0, …)` and a syntax-tree walk in another library do not convict a file between them; the punctuation-variable class needs the name to be *entirely* punctuation, so the shell's own `${(f)name}` stays quiet; the web-shell classes need the request to reach the sink, so a page that reads a form field stays quiet; the living-off-the-land classes need the binary named as an executable, so a changelog's "Update" beside a link stays quiet. The Windows script classes are measured on 7,686 scripts from eighteen public administration repositories (PowerShell itself, Pester, dbatools, CSS-Exchange, Chocolatey packages, DSC resources and others): 7 false verdicts, and 63 for the first version of the content, which gave every shape eight points | 4 of 24,999 benign files in the wide sweep, all genuine offensive material shipped by Kali packages; 4 of 2,398 in heldout, not inspected by rule. `make eval` on the shipped corpus: FPs 0 → 0 after the GTFOBins, LOLBAS, LOLC2, LOLFSaaS and ArcticFox-bypass expansions |
+| Encoded executable | embedded encoded binaries in security tooling and exploit docs (impacket, lsassy, nxc, metasploit) — genuine encoded executables, flagged as designed | 26 of 139,860 benign files (0.019 %) |
+| Obfuscation-chain peeler | exploit module documentation that carries its own payload — Metasploit RCE modules with carve chains, the `lsassy` and `nxc` embedded dumps; genuine payloads, flagged as designed | 10 of 130,673 benign files (0.0077 %) |
 
 ## The network plane
 
@@ -146,9 +147,9 @@ is what remains true after all of that.
 - **The budget is a wall, not a horizon.** Past 512 nodes, 64 MiB, depth 32, six
   branches per node or 5 seconds a peel reports `peel.exhausted`. That is a finding,
   and what lay beyond it stays unseen.
-- **The false-positive number comes from a Kali host.** Over 116,885 benign files it
+- **The false-positive number comes from a Kali host.** Over 130,673 benign files it
   flagged 10, all real payloads in offensive tooling. It has not been measured on an
-  ordinary host. Rotation and carving add time: that set took 65 s against 44 s
+  ordinary host. Rotation and carving add time: that set took 71 s against 44 s
   before, about 0.2 ms more on a small text file.
 
 ## Detection robustness (measured)
@@ -202,6 +203,51 @@ numeric parameters, and the field-false-positive caveat below applies to them
 too.
 
 ## What is not covered yet
+
+- **The offensive-PowerShell classes that are one capability and have an
+  ordinary use.** The scoring rule is that a class of 8 or more convicts alone
+  and anything weaker needs a second finding. A script that takes a screenshot
+  once (4), rewrites a file's timestamps (3), forwards a port (5), removes an
+  update quietly (5) or starts a process under another account (0) is doing
+  something an administrator also does, so those files stay below the
+  threshold and the corpus counts them as misses. A toolkit's *loader* scores
+  nothing at all: `Get-ChildItem` over a tree piped to `Import-Module` or
+  dot-sourced is how every PowerShell module loads itself, and the loader is
+  not the attack, the modules it loads are. The held-out offensive PowerShell
+  class is therefore measured at **95 of 181 (52.5 %)** and the remainder
+  is mostly this shape, not a missing rule. Giving each such script a class
+  of its own worth eight points was tried and measured: it took the dev
+  split's PowerShell class from 78 to 94 of 102, left the held-out one at
+  95 of 181, and convicted 63 of 7,686 public administration scripts
+  where 7 are convicted now. The two obfuscation shapes that are not "a
+  command assembled from unrelated strings" — a command in variables whose
+  names are punctuation, and a script parsed into a syntax tree and rewritten
+  — are kept as eight-point classes of their own, because neither has an
+  ordinary use and both are tight: the shell's own `${(f)name}` does not match
+  the first, and the syntax-tree namespace is in no administration script.
+- **Packed tools that reach the credential stores through ordinary libraries.**
+  A packer keeps the import table, and with it the library list *and* the
+  function names — the loader needs the names to rebuild the address table.
+  A packed credential dumper is therefore reported from the credential stores'
+  own libraries (`samlib`, `cryptdll`, `vaultcli`) or from a credential-store
+  API that survived in the function list. What is still not caught is one
+  that reaches the same stores through `advapi32`, `mpr` and `netapi32`, which
+  is what every file manager and every Qt program links, and two of the three
+  packed dumpers in the dev split are of that kind: they are reported as
+  packed and nothing more. Reading those imports would convict packed
+  installers, so the rule does not. A packer that destroys the import table
+  outright and resolves the functions by hash at run time is not read at all.
+- **The LOLBAS catalogue's single-binary invocations.** `msbuild.exe
+  project.proj`, `dotnet.exe library.dll`, `mofcomp.exe file.mof` and
+  `fsi.exe script.fsscript` are documented abuse paths, and each is also what
+  a developer, a build and an administrator type. The catalogue corpus is
+  therefore measured at **128 of 408 (31.4 %)**, and the remaining misses are
+  dominated by these: a rule that convicted them would convict the build
+  system too.
+- **Web-shell toolkit components.** A toolkit's IP-allow-list gate scores 4 and
+  its menu page scores 0, because neither has a capability of its own — the
+  gate exists to hide the pages that do. Detecting them would mean detecting
+  the *project's* name, which the content rules refuse to do.
 
 - **File formats.** The structural pass parses PE, ELF (32- and 64-bit, both
   byte orders; executables, shared objects, relocatable objects and kernel

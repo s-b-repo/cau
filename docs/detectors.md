@@ -209,6 +209,7 @@ and the threshold is 8, so several independent things must be wrong at once.
 | `header.low-alignment` | 1 | hand-built or squeezed image |
 | `imports.none`, `.empty-descriptors`, `.loader-only`, `.minimal` | 2, 2, 2, 1–2 | import table that says nothing (T1027.007) |
 | `packer.generic` / `packer.<name>` | 3 / 2 | packed profile; a recognised packer (UPX, ASPack, Themida, VMProtect, ...) weighs *less* because the report names it; installer stubs are informational |
+| `packer.credential-imports` | 3 | a *packed* executable whose import table still names the credential stores' own libraries (`samlib`, `samsrv`, `cryptdll`, `lsasrv`, `vaultcli` and the authentication packages), or a credential API that happened to survive (`SamConnect`, `LsaRetrievePrivateData`, `LsaFreeReturnBuffer`, the vault enumerators) (T1003). A packer keeps one import from each library so the loader can map it: the list of libraries survives packing, and so does the function list, because a packer that keeps the import table keeps the names the loader needs to rebuild the address table. All five packed tools in the corpus keep theirs. The libraries a remote dumper shares with every file manager and every Qt program are deliberately not read |
 | `overlay.high-entropy`, `overlay.present` | 2, 1 | data appended past the last section (T1027.009) |
 | `authenticode.vendor-name-self-signed` | 6 | a self-signed certificate wearing a well-known vendor's name crosses the threshold on its own (T1036.001) |
 | `authenticode.self-signed`, `.no-codesign-eku`, `.long-validity`, `.compiled-outside-validity`, `.parse-error` | 3, 2, 1, 2, 1 | signer implausibility (T1553.002, T1070.006, T1036.001) |
@@ -244,7 +245,7 @@ Measured on the 49 PE files in `/usr/share/windows-resources`, 43 score 0,
 the UPX-packed `wget.exe` scores 7 and renders as low suspicion with the
 packer named, nothing crosses the threshold, and credential tools score 0 here
 by design because capability is the heuristic pass's job.
-Measured on 4,974 ELF files under Kali's `/usr/bin`, `/usr/sbin`,
+Measured on 4,999 ELF files under Kali's `/usr/bin`, `/usr/sbin`,
 `/usr/lib/x86_64-linux-gnu`, `/usr/libexec` and `/usr/lib/systemd` plus 40
 signed kernel modules, nothing crosses the threshold and 21 files carry a
 single weight-1 observation (launcher stubs with three or fewer imports,
@@ -303,11 +304,14 @@ The report lists every codepoint with its count, how many occurrences a
 context rule excused and which rule, the first line and byte offset, and up
 to two bounded examples with the invisibles rendered as `<U+200B>`.
 
-Measured on 70,102 benign text artifacts (every text file under Kali's
-`/usr/share/doc` and `/usr/lib/python3/dist-packages`) the pass fires on 70,
+Measured on 70,200 benign text artifacts (every text file under Kali's
+`/usr/share/doc` and `/usr/lib/python3/dist-packages`) the pass fires on 69,
 a 0.10 % false-positive rate, and on none of the 294 text files in
-`/usr/share/windows-resources`; the context rules excused 348 legitimate
-uses. The remaining false positives are the two documented classes: a stray
+`/usr/share/windows-resources`; the context rules excused 35,187 legitimate
+uses — 21,939 emoji sequences and 11,258 emoji presentation selectors, 1,635
+joining-script joiners, 126 subdivision flags, 84 byte-order marks, 74
+spaceless-script spaces and 71 bidirectional controls. The remaining false
+positives are the two documented classes: a stray
 ZERO WIDTH SPACE pasted into documentation or a translation file, and source
 files that enumerate Unicode categories. See [Limitations](limitations.md).
 
@@ -335,10 +339,12 @@ T1140 (through layers) and `novel` NOVEL-012.
 
 It is SUSPICIOUS-tier, never MALICIOUS: an embedded encoded binary is strong
 evidence, not proof of malice (installers and security tools carry them too).
-Measured over 159,339 benign files from a Kali install, it fired on 32
-(0.020 %), every one a genuine embedded encoded executable in offensive
-tooling or exploit documentation. `--no-encchain` disables it and
-`--encchain-threshold` tunes the score.
+Measured over 139,860 benign files from a Kali install — `/usr/share/doc`,
+`/usr/lib/python3/dist-packages`, `/usr/share/nmap` and
+`/usr/share/metasploit-framework` — it fired on 26 (0.019 %), every one a
+genuine embedded encoded executable: Metasploit module documentation with its
+own carve chains, and the `lsassy` and `nxc` embedded payloads.
+`--no-encchain` disables it and `--encchain-threshold` tunes the score.
 
 ## Obfuscation-chain peeler
 
@@ -375,8 +381,8 @@ Depth past 2 adds 15 per layer, and a substitution adds 15 at any depth, because
 packaging tool writes one. The threshold is 50. One budget covers the whole tree:
 512 nodes, 64 MiB of decoded output, depth 32, 6 branches per node, 5 seconds.
 Everything is T1027 and NOVEL-012, and the chain signature, such as
-`base64>rot13>flate`, is the family key. Over 116,885 benign files it flagged 10, all
-real payloads inside offensive tooling.
+`base64>rot13>flate`, is the family key. Over 130,673 benign files it flagged
+10 (0.0077 %), all real payloads inside offensive tooling.
 
 ## Shell Link (.lnk)
 
@@ -591,18 +597,26 @@ behaviour rather than a project:
 
 | Family | Classes | Fires on |
 |---|---|---|
-| Web shells (T1505.003) | `tradecraft.webshell.*` | a request parameter reaching an exec sink in PHP (directly, or followed through assignments by a small taint walk), ASP, ASP.NET, JSP, ColdFusion and CGI; PHP evaluating a decoded string |
+| Web shells (T1505.003) | `tradecraft.webshell.*` | a request parameter reaching an exec sink in PHP (directly, concatenated into the command, or followed through assignments by a small taint walk), ASP, ASP.NET, JSP, ColdFusion and CGI; PHP evaluating a decoded string; a request parameter that is parsed as a URL (or whose upstream headers are replayed), fetched and streamed back, in PHP or through an ASP XMLHTTP object, followed by the same taint walk: a proxy into the server's network. A page that reads a file the request named is not that, and an admin panel's file editor stays quiet. A request parameter choosing the name the page resolves (6) and a page that answers only a hard-coded list of client addresses (4) corroborate and convict together. `$_SERVER` counts as request input only for the entries a client sets (`HTTP_*`, the query string, the path, the remote address), not for `argv` or `DOCUMENT_ROOT` |
 | Network shells (T1059) | `tradecraft.netshell.*` | a socket wired to an interpreter in shell, PHP, Python, Perl, Java, Ruby, Lua and PowerShell; relay tools (`nc`/`ncat`/`socat` with `EXEC:` or `SYSTEM:`, `openssl s_client`, BusyBox `telnetd`, `awk`'s `/inet`); a Python stager executing what it reads from a socket |
 | Unix breakouts (T1059.004, T1548.001, T1548.003) | `tradecraft.gtfobins.*` | [GTFOBins](https://gtfobins.github.io) escapes: a utility driven to spawn an interactive shell (editor/pager bang-escape, `pty.spawn`, `nmap --interactive`, `awk 'BEGIN{system}'`, `gdb -ex '!sh'`); the same under `sudo` (privilege escalation); a setuid breakout (`sh -p`, or the setuid bit set on a shell). The escape syntax is the signal, so a plain `find -exec rm` or `sudo sh -c` stays quiet |
 | In-memory execution (T1620) | `tradecraft.memory.*` | scripts allocating memory through native APIs and starting a thread in it, loading a .NET assembly from decoded bytes, or reaching native APIs by reflection |
-| Living off the land (T1218, T1105, T1003, T1490) | `tradecraft.lolbin.*` | a [LOLBAS](https://lolbas-project.github.io) system binary fetching a remote payload, proxying execution through a script handler, dumping credential stores or destroying recovery. A binary's name proves nothing, so `regsvr32 /s foo.dll` stays quiet while `/i:` with a remote scriptlet does not. The set spans `certutil`/`bitsadmin`/`certreq`/`GfxDownloadWrapper`/`ms-appinstaller` download, `rundll32`/`regsvr32`/`mshta`/`Microsoft.Workflow.Compiler`/`AgentExecutor`/`Register-CimProvider` proxy execution, and the credential/recovery tools |
+| Living off the land (T1218, T1105, T1003, T1490, T1574, T1562.001) | `tradecraft.lolbin.*`, `tradecraft.script.environment-hijack`, `tradecraft.script.security-driver-unloaded` | a [LOLBAS](https://lolbas-project.github.io) system binary fetching a remote payload, proxying execution through a script handler, dumping credential stores (or the `NTDS.dit` directory database) or destroying recovery; a signed Windows binary with no business being handed a URL fetching one (a browser, an Office program or a Squirrel updater handed a URL is doing its job, and only corroborates); a system binary copying a file from a share addressed by number; a program run straight from a file share (5: logon scripts do it); the environment variable that says where Windows or its shell is found redirected before a program is run; a minifilter driver unloaded by name (6: a product's own uninstaller does it). A binary's name proves nothing, so `regsvr32 /s foo.dll` stays quiet while `/i:` with a remote scriptlet does not. The set spans `certutil`/`bitsadmin`/`certreq`/`GfxDownloadWrapper`/`ms-appinstaller` download, `rundll32`/`regsvr32`/`mshta`/`Microsoft.Workflow.Compiler`/`AgentExecutor`/`Register-CimProvider` proxy execution, and the credential/recovery tools |
+
 | Command channels (T1102) | `tradecraft.script.third-party-channel` | a script names a webhook (Discord/Telegram/Slack/Teams/Google Chat/DingTalk/Feishu/WeChat/Make/Zapier/IFTTT/Zulip/Webex/PagerDuty/Flock/Pushover/LINE Notify/ntfy/Healthchecks/n8n/ServerChan/PushPlus/…), a reverse tunnel (ngrok family/Cloudflare tunnels/localhost.run/serveo/localtunnel/dev tunnels/Tailscale/qsocket/ShellHub/tmate/pinggy/bore/packetriot/loophole/expose/sharedwithexpose/pitunnel/staqlab/telebit/…), a paste/file drop (pastebin raw/0x0.st/file.io/transfer.sh/catbox/anonfiles-class/…), an out-of-band interaction host (interact.sh/oast/burpcollaborator/dnslog/requestbin/…), a trusted-SaaS C2 cover from [LOLC2](https://lolc2.github.io) and [LOLFSaaS](https://lolfsaas.github.io) (Microsoft Graph, Google Drive/Sheets/Slides/Calendar/Translate, Dropbox, OneDrive, Firebase, Azure Functions, Cloudflare Workers/Pages, AWS Lambda, S3, Telegram bots, Discord CDN, Slack API, GitHub/GitLab/Bitbucket Contents/Gists, Reddit, Twitter/X, Mastodon, Spotify, SoundCloud, chess.com, lichess, OpenAI/Anthropic, blockchain RPC and explorers, …). Corroborating only |
 | SaaS C2 API abuse (T1102) | `tradecraft.c2service.saas-api-call` | a specific abusable path on a trusted host — `graph.microsoft.com/v1.0/me/sendMail`, firebaseio realtime-DB writes, Dropbox content upload, Google Apps Script `/macros/s/*/exec`, Cloudflare `workers.dev` / `pages.dev`, AWS Lambda invoke, SharePoint drive item write, Teams channel message POST. Higher signal than naming the host, because no browser hits these programmatically |
 | Detection bypasses (T1620, T1036.005, T1574.006, T1556.003, T1543.002, T1070.004, T1102.002, T1095, T1071.004, T1001.003, T1090.004) | `tradecraft.bypass.*` | the evasion primitives catalogued in [ArcticFox's bypass doc](https://github.com/s-b-repo/arcticfox-c3/blob/main/docs/Detection-Bypasses.md): `memfd_create` paired with `execveat`/`fexecve`/`/proc/self/fd` exec (anonymous in-memory binary), `prctl(PR_SET_NAME)` near a socket/exec (kernel-level process-name camouflage), writing `/etc/ld.so.preload` or resolving through `dlsym(RTLD_NEXT)` (shared-library shim), adding `pam_exec.so` to a PAM stack or replacing `pam_unix.so` (authentication-stack backdoor), `systemctl edit --full` or a `.service.d/override.conf` drop-in on a real unit (systemd unit hijack), unlinking `/proc/self/exe` (self-delete), fetching a GitHub README from the Contents / raw API with cache-busting params (dead-drop channel), a raw `IPPROTO_ICMP` socket paired with payload encode/decode (ICMP C2), `dns.resolver.resolve(..., 'TXT')` + `base64_decode` (DNS TXT C2), an open-redirect URL carrying zero-width codepoints (redirect heartbeat), a TLS `ServerName` that disagrees with the HTTP `Host` (domain fronting) |
 | Script tradecraft | `tradecraft.script.*` | AMSI tampering, download-and-execute, decode-and-execute, DCOM and `xp_cmdshell` execution, Group Policy password hunting, keyboard capture, token theft, disabling defences and the weaker signals below |
+| Windows script tradecraft that convicts alone | `tradecraft.script.*` | behaviour with no ordinary use, each scored 8: the name of the command assembled from characters of unrelated strings (`$env:ComSpec[4,24,25]-join''`, a variable found by wildcard for its name, the call operator on glued fragments, reordered format strings in bulk) (T1027.010); a command carried in variables whose *names* are punctuation (`${;}`, `${=}`), where the shell's own `${(f)name}` does not match because the name has to be entirely punctuation (T1027.010); a script parsed into a syntax tree and rewritten, the tree types named one by one (T1027.010); PowerShell's logging state reached by reflection (T1562.002); a per-user handler planted where an auto-elevating binary reads it (T1548.002); a WMI event filter bound to a consumer that runs a command (T1546.003); a debugger set on a logon-screen accessibility program (T1546.008); a list of passwords walked against an authentication interface (T1110); a shell command file whose icon is on a remote share (T1187); a process-starting script posted to an application server's script console, or its JMX deployer invoked (T1190); a boot sector written to a physical drive (T1561.002); a binary rebuilt from text, written out and started (T1027.009) |
+| Windows script tradecraft that corroborates | `tradecraft.script.*` | what an administrator's script also does, scored 3 to 6 so that two signals must agree: a mailbox rule created through Outlook (T1137.005); a password manager's key material located (T1555.005); an HTTP listener beside a minted certificate authority (T1557); a `netsh` port forward (T1090.001); an update uninstalled silently; a shortcut that starts an interpreter under another program's icon; a terminal profile's command line rewritten; the screen captured in a timed loop; a listener that also dials out. Starting a process under another account, validating a credential, importing a module tree and encrypting with a password are things every administration script does and are not classes at all |
+
 
 A class scoring 8 or more is a verdict alone: the behaviour has no ordinary use.
-Below that a class is something admin scripts also do, and two must agree:
+Where a behaviour has several parts they must sit together — within a few
+lines for a one-liner's shape, within one short script for the longer ones —
+so a module that opens a socket in one function and names a shell in another
+is not a shell wired to a socket.
+Below 8 a class is something admin scripts also do, and two must agree:
 credential-store access, token theft, remote execution, defence evasion and an
 unprivileged shell breakout score 6, reflection, autostart, capture and raw
 listening sockets score 4, timestomping, hidden windows, run-time command

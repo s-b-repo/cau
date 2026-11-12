@@ -12,7 +12,7 @@ That is the whole pricing story, and it is structural rather than
 promotional. The engine and every agent are MIT software with no license
 check at all: all detection — hash, YARA, heuristics, static structure,
 invisible-codepoint, encoded-executable, obfuscation-chain, document,
-container, package, archive and CHM passes, fused — and all on-host
+container, package, archive, CHM and tradecraft passes, fused — and all on-host
 prevention — quarantine, restore, block, kill, canaries — run on every host
 with no license, no metering and no phoning home. The only paid artifact is
 the multi-agent management console, because coordinating, distributing
@@ -24,7 +24,7 @@ alone.
 
 | Included in the free engine (MIT) | |
 |---|---|
-| Detection | all sixteen detectors plus the fusion lattice, shipped as content with measured false-positive rates |
+| Detection | all fifteen detectors plus the fusion lattice, shipped as content with measured false-positive rates |
 | Prevention | the full on-host response set: quarantine vault, restore, block, kill, canary tamper checks |
 | Output | text (control-char / bidi escaped), JSON schema 1.13.0, SARIF 2.1.0, OCSF 1.3.0 Detection Findings, CI exit codes |
 | SIEM forwarders | the agent speaks SIEMs directly, so SIEM delivery is free. `cau scan --wazuh-url <manager>` posts the scan's OCSF findings to the Wazuh Manager REST API (`/security/user/authenticate` + `/events`) with JWT auth and a configurable CA bundle. syslog, Splunk HEC, Elastic/OpenSearch `_bulk` and OCSF-Lake sinks follow the same rule and ship free when added. The resident agent forwards too, not just one-off scans: `cau defend --wazuh-url <manager>` posts every correlated incident as it is raised, asynchronously and with a bounded local queue, so continuous delivery to your own SIEM needs no control plane |

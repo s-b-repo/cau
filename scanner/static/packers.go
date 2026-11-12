@@ -96,6 +96,73 @@ var loaderOnlyImports = map[string]bool{
 	"exitprocess": true, "getmodulehandlea": true, "getmodulehandlew": true,
 }
 
+// What a packed executable's import table still says.
+//
+// A packer compresses the program's strings and most of its import table, but
+// the Windows loader has to map every library before the stub runs, so the stub
+// keeps one import from each: the list of libraries survives, the list of
+// functions does not. (Measured on UPX-packed mimikatz, pwdump and 111 packed
+// Wine executables: one function per library, whichever the linker put first.)
+// So the evidence that is left is which libraries the program needs, and that
+// is what these tables read. A function name is only used where it happens to
+// be the one that survived.
+//
+// The structural pass leaves an unpacked program's imports alone on purpose: a
+// credential tool that shows its strings is the heuristic detector's business.
+// A packed one has had those strings taken away, and its library list is the
+// only thing left that says what it is.
+
+// credentialLibraries exist to serve or to read the credential stores: the SAM
+// client and server, LSA's own crypto and server libraries, the vault client,
+// and the authentication packages themselves. Ordinary software reaches
+// credentials through advapi32 and crypt32 and links none of these; of 700
+// executables and libraries that Wine ships, none does.
+//
+// The table stops there on purpose. The libraries a remote password dumper
+// also needs (advapi32 for the registry and services, mpr and netapi32 for
+// shares) are linked by a file manager, an installer and every Qt program, and
+// a packed image already sits one point under the threshold on structure
+// alone: reading any of those as evidence would convict packed software for
+// being ordinary. Two packed dumpers in the lab's dev split link nothing else,
+// and this pass does not report them.
+var credentialLibraries = map[string]bool{
+	"samlib.dll": true, "samsrv.dll": true, "cryptdll.dll": true, "lsasrv.dll": true,
+	"vaultcli.dll": true, "wdigest.dll": true, "kerberos.dll": true, "msv1_0.dll": true,
+	"tspkg.dll": true, "livessp.dll": true,
+}
+
+// credentialImports are functions that read stored credentials whatever
+// library the packer left them under.
+//
+// LsaFreeReturnBuffer is the one that frees what the LSA hands back, so a
+// program that calls it is a program that asked the LSA for something. A
+// packer that keeps one import per library happens to keep it, and it is
+// what the two packed credential editors in the corpus are read by.
+var credentialImports = map[string]bool{
+	"samconnect": true, "samenumerateusersindomain": true, "samqueryinformationuser": true,
+	"lsaretrieveprivatedata": true, "lsaenumeratelogonsessions": true, "lsafreereturnbuffer": true,
+	"credenumeratea": true, "credenumeratew": true, "vaultenumeratevaults": true, "vaultenumerateitems": true,
+}
+
+// packedCredentialImports names what in a packed image's import table reads
+// credential stores.
+func packedCredentialImports(p *PE) []string {
+	var hits []string
+	for _, d := range p.Imports {
+		dll := strings.ToLower(d.Name)
+		if credentialLibraries[dll] {
+			hits = append(hits, dll)
+			continue
+		}
+		for _, f := range d.Functions {
+			if credentialImports[strings.ToLower(f.Name)] {
+				hits = append(hits, dll+"."+f.Name)
+			}
+		}
+	}
+	return hits
+}
+
 // identifyPacker combines section-name, entry-point and structural evidence.
 func identifyPacker(p *PE, data []byte) *Packer {
 	var pk Packer

@@ -1,7 +1,7 @@
 # Output formats
 
-`cau scan` writes one report per run in one of thirteen formats: text, JSON,
-SARIF, OCSF and the nine [SIEM sink formats](#siem-sink-formats). The text format
+`cau scan` writes one report per run in one of fourteen formats: text, JSON,
+SARIF, OCSF, STIX and the nine [SIEM sink formats](#siem-sink-formats). The text format
 is for people; the rest are for machines. JSON and SARIF are written even when the run fails (with `run_error` set and exit code 3), so a
 pipeline always gets a document, and the stderr banner never enters them.
 

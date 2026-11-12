@@ -85,6 +85,7 @@ var classCatalog = []Class{
 	// Packers.
 	{"packer.generic", CatPacker, 3, techPacking, fmtBoth, "packed executable profile with no recognised packer"},
 	{"packer.*", CatPacker, 2, techPacking, fmtBoth, "a recognised packer (UPX, ASPack, Themida, VMProtect, ...) named by its markers"},
+	{"packer.credential-imports", CatPacker, 3, techCredDump, fmtPE, "a packed executable whose import table still names the credential stores' own libraries (SAM, LSA, vault): the packer hid the strings, not the library list"},
 	{"packer.installer-stub", CatInfo, 0, "", fmtPE, "self-extracting installer stub; a compressed payload is expected (informational)"},
 
 	// Overlay.

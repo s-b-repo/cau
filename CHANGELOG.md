@@ -5,6 +5,179 @@ All notable changes to CAU EDR. The format follows
 
 ## [Unreleased]
 
+### More recall, from behaviour rather than from names
+
+The lab corpus's misses were read one class at a time and the detection content
+was widened to cover the *behaviours* the misses turned out to be. The lab
+dev split went from **166 of 222 (74.8 %)** to **194 of 222 (87.4 %)** and the
+held-out split, which the rules were not written against, from **171 of 280
+(61.1 %)** to **179 of 280 (63.9 %)**. False positives are where they were: 3 of
+2,368 benign files on dev, 6 of 2,398 on heldout, 38 of 24,999 on the wide sweep.
+
+What was added, all of it behaviour and none of it a tool name:
+
+- **Web shells that do not execute anything.** A page that parses a request
+  value as a URL, fetches it and streams the body back is a proxy into the
+  server's network, in PHP or through a classic-ASP XMLHTTP object, and is
+  found by the same taint walk that follows a request into an exec call. A
+  page that resolves a name the request chose (6) and one that answers only a
+  hard-coded list of client addresses (4) corroborate, and convict together.
+- **Windows script behaviour with no ordinary use**, each worth 8: a command
+  name assembled from characters of unrelated strings
+  (`$env:ComSpec[4,24,25]-join''`), a command carried in variables whose
+  names are punctuation (`${;}`, `${=}`), a script parsed into a syntax tree
+  and rewritten, PowerShell's logging state reached by reflection, a per-user
+  handler planted for an auto-elevating binary, a WMI event filter bound to a
+  command consumer, a debugger set on a logon-screen accessibility program, a
+  password list walked against an authentication interface, a shell command
+  file whose icon is on a remote share, a script posted to an application
+  server's console or its JMX deployer invoked, a boot sector written to a
+  physical drive, a binary rebuilt from text, written out and started.
+- **What administrators also do**, scored 3 to 6 so two signals must agree: a
+  mailbox rule created through Outlook, a password manager's key material, an
+  HTTP listener beside a minted certificate authority, a port forward, an
+  update removed silently, a shortcut to an interpreter under another icon, a
+  terminal profile's command line, the screen captured on a timer, a listener
+  that also dials out.
+- **Packed credential dumpers.** A packer hides the strings but keeps the
+  import table, and a packer that keeps the import table keeps the function
+  names in it, because the loader needs them to rebuild the address table —
+  all five packed tools in the corpus keep theirs. The structural pass reads
+  that table *for packed files only*: the credential stores' own libraries
+  (`samlib`, `cryptdll`, `vaultcli`, the authentication packages), and the
+  credential-store APIs that survived in it, `LsaFreeReturnBuffer` among them.
+  The libraries a remote dumper shares with every file manager and every Qt
+  program are deliberately not read, and the two packed dumpers that link
+  nothing else stay below the threshold; see [Limitations](docs/limitations.md).
+  The pinned contract that a UPX-packed `wget.exe` scores 7 and stays below
+  the threshold still holds.
+- **Living off the land.** A signed Windows binary with no business being
+  handed a URL fetching one, a system binary copying a file from a share
+  addressed by number, the variable that says where Windows is found
+  redirected before a program is run, the `NTDS.dit` database backed up. A
+  browser, an Office program or an updater handed a URL, a program run from a
+  file share and a minifilter unloaded by name are things administrators and
+  installers do, and corroborate.
+
+### The first version of that content was measured, and most of its gain was not real
+
+The content above was written twice. The first version gave every miss in the
+dev split a class of its own worth eight points, so each sample convicted
+alone: dev reached 210 of 222. The held-out split, which shares no tool with
+dev, reached 179 with one more false positive; it is at 179 now, because the
+two packed dumpers are found through the function list the packer kept rather
+than the library list it also kept. Run over
+7,686 scripts from eighteen public administration repositories it convicted
+63, where the build before it convicted 8 and this one convicts 7. One
+rule that asked for a `Substring` call, a `-join` and a `ForEach-Object`
+anywhere in a file accounted for 51.
+
+What changed between the two:
+
+- **Scores follow the catalog's own rule.** Eight is for behaviour with no
+  ordinary use. A process started with a password, one credential tried per
+  server, a module that imports its own directory and encryption with a
+  password are administration, and are no longer classes. Nine further
+  classes were kept and scored as corroboration.
+- **The parts of a behaviour must sit together.** A vector can now require
+  its expressions inside one window (`within`) and its first expression a
+  number of times (`atLeast`). Applied to the older network-shell and CGI
+  vectors as well, that cleared Python's `test/support`, yt-dlp,
+  `speechd_config`, `CGI.pm` and `mariadb-access`, which each held the parts
+  of a shell somewhere in several thousand lines. No detection in the dev
+  split or in either reverse-shell split was lost to it.
+- **`$_SERVER` is the request only where a client sets it.** `argv`, `HOME`
+  and `DOCUMENT_ROOT` are the machine's; counting them had convicted
+  Symfony's Process component and PHPUnit bridge. On 26,258 PHP files from
+  six public projects, false verdicts went from 8 to 1. `assert()` is an
+  exec sink only when its argument is not a test.
+- **A packed image is read by library, not by function.** The first version
+  matched function names, which survive packing only by the luck of link
+  order, and scored a registry read beside a service query as credential
+  dumping. It convicted both packed dumpers in the held-out split; the
+  library reading convicts neither, and that is recorded as a limitation,
+  not hidden.
+- **Two classes were tried and removed for counting evidence twice.** A class
+  for the debug privilege and one for reading another process's memory named
+  the same APIs the heuristic detector scores, and fusion read the agreement
+  as corroboration: psutil's Windows tests became a fused verdict on the wide
+  sweep. With them the held-out split read 179 and without them 177: the
+  removal was decided on the wide-sweep finding, and what it cost on the
+  held-out split is reported here and is not a reason to put them back.
+- **Smaller corrections.** A syntax highlighter's keyword list is not a
+  download cradle; `wmic … /format:csv` is not a stylesheet; a PowerShell
+  test with a `param()` block is not a CGI script; Ruby's `TCPServer.new` is
+  not tornado's `TCPServer`.
+
+The LOLBAS/GTFOBins catalogue corpus goes from 109 of 408 (26.7 %) to **128 of
+408 (31.4 %)**; the first version's 145 included the browser, Office and
+updater lines above. It is a coverage figure, never a detection rate.
+
+Thirteen ATT&CK techniques gained content and are recorded in the coverage
+expectation: T1090.001, T1110, T1137.005, T1187, T1190, T1546, T1546.003,
+T1546.008, T1548.002, T1555.005, T1557, T1561.002 and T1562.002. `cau
+coverage` now reports 95 techniques with content, 92 covered and 3 partial.
+The boot-sector class is mapped to T1561.002 (Disk Wipe: Disk Structure
+Wipe); an earlier draft had it under T1565.001, which is Stored Data
+Manipulation.
+
+### The measurements in the documentation are re-derived, and one of them was wrong
+
+Every published figure was re-measured on `v0.3.0-2-g8cdb25b` (2026-11-11)
+rather than copied forward, and the coverage claim was the stale one: the
+documentation said the engine covered **59 ATT&CK techniques** with content,
+and `cau coverage` on the current tree reports **82** — 79 covered and 3 held
+honestly as partial, with no declared gaps. The expectation file
+(`baselines/attack-coverage.txt`) has carried all 82 rows; only the prose was
+behind.
+
+The other figures moved because the machine's package set moved, not because
+detection content changed:
+
+| Figure | Published | Re-measured |
+|---|---|---|
+| ATT&CK techniques with content | 59 | **82** (79 covered, 3 partial) |
+| static ELF population | 4,974 files | **4,999** files (7,301 walked), still 0 detections |
+| encoded-executable pass | 32 of 159,339 (0.020 %) | **26 of 139,860 (0.019 %)** |
+| obfuscation-chain peeler | 116,885 files | **130,673 files**, still 10 hits |
+| invisible-codepoint pass | 70 of 70,102 (0.10 %), 348 excused | **69 of 70,200 (0.10 %), 35,187 excused** |
+| output formats | "thirteen" | **fourteen** — STIX was implemented and documented but never counted |
+| held-out false positives | 6/2,431 | **6/2,424** — the corpus holds 2,431; seven benign files are absent from this host |
+| wide benign sweep | 38/25,000 | **38/24,999** — one file drifted from the manifest and was excluded |
+
+The stego row moved the most in substance rather than in size: the excused
+count went from 348 to 35,187 because the context rules now cover emoji
+sequences and presentation selectors (33,197 of the excused occurrences), which
+is what keeps the pass at 0.10 % over 70,200 text artifacts instead of firing
+on every emoji in a Python package.
+
+The format count was wrong in the same way: `--format` has accepted `stix`
+since the STIX reporter landed, `docs/output-formats.md` has a section for it,
+and the count of thirteen was never updated to include it.
+
+The detection figures themselves did not move: 171 of 280 held out (61.1 %),
+166 of 222 in dev (74.8 %), 34 of 39 on the unseen reverse shells (87.2 %),
+38 hits on the wide sweep, 28 heuristic detections on the 349-file Windows
+tool set, 49 PE files with 43 scoring 0, and 8 YARA rules passing
+`cau rules lint --strict` with no errors and no warnings.
+
+`docs/evaluation.md` now names the build the numbers describe instead of
+`0.1.0-dev`, and says plainly which denominators moved because files were
+missing from the machine rather than because a detector changed. The
+per-detector breakdown of the held-out run, the wide sweep's false positives
+by detector, and the content inventory behind the coverage claim are recorded
+there.
+
+Two measurement rows were added for passes that had no repeatable command:
+the obfuscation-chain peeler and the encoded-executable pass are now measured
+by `internal/peeler` `TestMeasureRealPeel` and `scanner/encchain`
+`TestMeasureRealEncChain`, and their results are in the table of measured
+figures.
+
+`docs/pricing.md` counted sixteen detectors where the engine has fifteen plus
+the fusion lattice, and omitted the tradecraft pass from the list of free
+detection.
+
 ## [0.3.0] - 2026-11-11
 
 ### Upgrading to 0.3.0

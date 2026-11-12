@@ -53,8 +53,9 @@ and most decoders can be made to succeed on ordinary input.
   branch without a finding.
 
 ## False Positives
-Measured over 116,885 benign files from `/usr/bin`, `/usr/share/doc`, Python
-packages and nmap's data: 10 revealed payloads and 0 budget exhaustions. All 10 are
+Measured over 130,673 benign files from `/usr/bin`, `/usr/share/doc`,
+`/usr/share/man`, Python packages, nmap's data and `/etc`: 10 revealed
+payloads and 0 budget exhaustions. All 10 are
 real encoded payloads inside offensive tooling on a Kali host: 8 Metasploit exploit
 documents and 2 `lsassy` embedded dumpers. A hit in that kind of file is correct and
 expected. There is no measurement on an ordinary host yet.

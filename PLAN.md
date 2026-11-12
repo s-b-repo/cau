@@ -45,7 +45,7 @@ A roll-up of the OSS engine as it stands; the phase sections below hold the
 detail and the open items. Everything here is measured and gated in CI
 (`make ci`: vet, race tests, rule lint, coverage gate, eval gate).
 
-**Detectors (thirteen, single-pass, plus a fusion lattice):**
+**Detectors (fifteen, single-pass, plus a fusion lattice):**
 - Hash signatures, YARA (in-process libyara), string/API heuristics.
 - Static structure — own bounds-checked PE, ELF and Mach-O parsers, entropy,
   packer, overlay, Authenticode, TLSH/ssdeep/imphash/telfhash similarity. ELF
@@ -54,7 +54,7 @@ detail and the open items. Everything here is measured and gated in CI
   encryption presence) landed 2026-11-02.
 - Invisible-codepoint (stego) pass.
 - Encoded-executable pass (`scanner/encchain`) — base64/hex layers decoding to
-  a PE/ELF header; measured 0.020% FP over 159,339 benign files.
+  a PE/ELF header; measured 0.019% FP over 139,860 benign files.
 - Shell Link (.lnk) pass (`scanner/lnk`) — [MS-SHLLINK] parser reading
   weaponised-shortcut signals (interpreter arguments, encoded/hidden-window
   flags, env-var path obfuscation, executable target, icon lure, overlay).
@@ -138,8 +138,9 @@ detail and the open items. Everything here is measured and gated in CI
 - Detection-robustness harnesses for all four content detectors; they found and
   closed two case-sensitivity gaps (wannacry, generic-ransomware extensions).
 
-**ATT&CK coverage of shipped content:** the engine now covers 59 techniques
-with content (up from 46 after the Linux software-package detector landed
+**ATT&CK coverage of shipped content:** the engine now covers 95 techniques
+with content — 92 covered and 3 partial (up from 59 when this paragraph was
+last written, and from 46 after the Linux software-package detector landed
 2026-11-02: T1195.002, T1547.013, T1496, T1059.004, T1562.001, T1140,
 T1098.004, T1548.003, T1222.002, T1543.002, T1053.003, T1546.004, T1105,
 T1571, T1027, T1070, and T1542.001 System Firmware from the UEFI scan), and the
@@ -154,7 +155,8 @@ sensor row). Limitations are still published — as `partial` states and the
 follow-up worth taking: widen the expectation to track genuinely-uncovered
 techniques as new published gaps, so the counterfactual stays visible.
 
-**Measured 2026-11-07:** the first recall number that is not synthetic. A local lab
+**Measured 2026-11-11** (`v0.3.0-2-g8cdb25b`, re-run end to end): the first
+recall number that is not synthetic. A local lab
 corpus of real offensive tooling, split by tool, took held-out detection from 25.4 %
 to 61.1 % (`docs/evaluation.md`). Recall against real malware (`make eval-recall`)
 is still unmeasured, so the Phase 1 "real corpus" item stays open.
@@ -953,7 +955,7 @@ command, not part of the per-file `cau scan`. The remaining Phase 8 items below 
   segments, stripped section tables, interpreter and `RPATH` hijack, `dlsym`-resolving
   libc interposers, loader-only imports, kernel-module signature and `modinfo` state,
   malformed tables), ELF imports in the heuristics pass with a Kernel Rootkit category,
-  measured at 0 detections on 4,974 Kali ELF files. **Deep-resolution shipped
+  measured at 0 detections on 4,999 Kali ELF files. **Deep-resolution shipped
   2026-11-02** (`scanner/static/elf_reloc.go` + edits): `.init_array`/
   `.preinit_array` constructor-pointer targets are resolved through the
   relocations and a pointer landing outside executable code flags
@@ -1181,10 +1183,10 @@ catch and how to catch it, not how to build it. This Phase 4-connected work maps
   (Khmer, Thai, Lao, Myanmar, Tibetan), directional controls on a line holding RTL text,
   CJK variation sequences, subdivision-flag TAG sequences. Classes beyond zero-width:
   bidi controls (Trojan Source), TAG characters, data-carrying variation selectors.
-  Measured: 70 detections on 70,102 benign text artifacts from Kali's `/usr/share/doc`
+  Measured: 69 detections on 70,200 benign text artifacts from Kali's `/usr/share/doc`
   and `/usr/lib/python3/dist-packages` (0.10 % FP; stray pasted U+200B in docs and
   translation files, and Unicode-table source such as xregexp / jinja2), 0 on the 294
-  text files in `/usr/share/windows-resources`, 348 legitimate uses excused by the
+  text files in `/usr/share/windows-resources`, 35,187 legitimate uses excused by the
   rules above. The Khmer and RTL rules were added *because of* that measurement (they
   removed 9 + 8 false positives); nothing else was tuned. A YARA module cannot back
   this detector in go-yara without C, and a byte-pattern rule for the UTF-8 of U+200D
@@ -1705,7 +1707,7 @@ pointless by making attacks fail — never by hiding.
   **Closed 2026-11-06** by `TestEveryFormatTreatsAHostileFileNameAsData`
   (`internal/report/hostile_formats_test.go`): one file name carrying every line
   format's separators, a newline plus a forged syslog frame, a terminal escape and a
-  bidi override is rendered in all thirteen `--format` values; none gains a result or a
+  bidi override is rendered in all fourteen `--format` values; none gains a result or a
   line, none emits a raw escape byte, and the JSON formats return it byte for byte. The
   fixture exercises the file path; threat names and rule metas take the same code
   paths but are not separately fuzzed with hostile values.
@@ -3507,8 +3509,8 @@ deferred for a stated reason, not forgotten, and will not be padded into
       ELF header, up to a layer/byte/candidate cap. Content-anchored, never
       name-anchored; SUSPICIOUS-tier. Wired through the engine, fusion, the
       text/JSON (schema 1.4.0)/SARIF/OCSF reports, the `encchain` eval detector
-      and a smoke fixture, and the coverage matrix. **Measured:** 0.020 % on
-      159,339 benign files, every hit a genuine embedded encoded executable in
+      and a smoke fixture, and the coverage matrix. **Measured:** 0.019 % on
+      139,860 benign files, every hit a genuine embedded encoded executable in
       offensive tooling or exploit docs. This is the cheap pre-pass of
       NOVEL-012; the full peeler (nested archives, decompression, emulation
       fallback) remains Phase 10 work. Coverage expectation flipped T1140 and
@@ -3547,6 +3549,31 @@ deferred for a stated reason, not forgotten, and will not be padded into
       asks.
 
 ### Process additions
+
+- [x] **The detection-quality program's own gate, run against real tooling.**
+      The program above says "measure or don't ship"; this is the measurement.
+      The lab corpus's misses were read class by class and the content was
+      widened to cover the behaviours they turned out to be — web shells that
+      relay or resolve rather than execute, Windows script behaviour with no
+      ordinary use (a command name assembled from unrelated strings, a
+      password list walked against a logon interface, a shell command file
+      with a remote icon, an application-server console, a boot sector written
+      to a physical drive, a binary rebuilt from text and started), packed
+      credential dumpers read through the library list the packer kept, and
+      the living-off-the-land shapes (a signed binary with no business being
+      handed a URL, a redirected system-root variable, the `NTDS.dit` backup).
+      **Measured 2026-11-12** (`make eval-lab`, build `v0.3.0-2-g8cdb25b` plus
+      this change): lab dev **166 → 194 of 222 (74.8 % → 87.4 %)**, held out
+      **171 → 179 of 280 (61.1 % → 63.9 %)**, LOLBAS/GTFOBins catalogue
+      **109 → 128 of 408 (26.7 % → 31.4 %)**. False positives unchanged: dev
+      3 of 2,368, held out 6 of 2,398, wide sweep 38 of 24,999.
+      A first version that gave every dev miss its own eight-point class
+      reached 210 on dev and 179 on heldout with one more false positive
+      (the two it had over this one are packed dumpers convicted on function
+      names that survive packing by luck), and convicted 63 of
+      7,686 public administration scripts where this one convicts 7:
+      the gate is the held-out number and the benign populations, never dev.
+      The lookalikes are pinned by tests drawn from those false verdicts.
 
 - [x] Fold `make fuzz` into a scheduled (not per-PR) CI job with a longer
       `FUZZTIME`, committing any crasher as a seed under `testdata/fuzz/`.

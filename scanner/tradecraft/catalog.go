@@ -58,6 +58,9 @@ const (
 	classNTLMCraft      = "tradecraft.script.ntlm-crafting"
 
 	classLOLDownload     = "tradecraft.lolbin.remote-payload"
+	classLOLUNCRun       = "tradecraft.lolbin.remote-share-execution"
+	classEnvHijack       = "tradecraft.script.environment-hijack"
+	classSecurityDriver  = "tradecraft.script.security-driver-unloaded"
 	classLOLExec         = "tradecraft.lolbin.proxy-execution"
 	classLOLProxy        = "tradecraft.lolbin.proxy-capable"
 	classLOLDump         = "tradecraft.lolbin.credential-dump"
@@ -149,6 +152,9 @@ var catalog = map[string]catalogEntry{
 	classNTLMCraft:      {4, "T1550.002", "script builds NTLM authentication messages by hand"},
 
 	classLOLDownload:     {8, "T1105", "a system binary fetches or runs a remote payload"},
+	classLOLUNCRun:       {5, "T1105", "a program is run straight from a file share, so the binary arrives over the network"},
+	classEnvHijack:       {8, "T1574", "the environment variable that says where Windows or its shell is found is redirected, and a program is run from where it now points"},
+	classSecurityDriver:  {6, "T1562.001", "a minifilter driver is unloaded by name: how a file-system monitor is taken out of the way"},
 	classLOLExec:         {8, "T1218", "a system binary is used to proxy execution through a script handler or abuse flag"},
 	classLOLProxy:        {4, "T1218", "a binary known to proxy execution is invoked with arguments"},
 	classLOLDump:         {8, "T1003", "a system tool dumps credential stores or process memory"},

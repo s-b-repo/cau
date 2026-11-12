@@ -83,6 +83,7 @@ const (
 	techInvalidSig     = "T1036.001"
 	techMasquerade     = "T1036"
 	techCodeSigning    = "T1553.002"
+	techCredDump       = "T1003"
 	techMinEntropyExec = 7.0 // entropy above which an executable section is "packed"
 	minOverlayBytes    = 1024
 	minHighOverlay     = 4096
@@ -239,6 +240,14 @@ func anomalies(p *PE, now time.Time) []Anomaly {
 			// A recognised packer weighs less than an unrecognised profile:
 			// UPX on a benign tool is common, and the report already names it.
 			add("packer."+slug(pk.Name), CatPacker, 2, techPacking, "packed with %s (%s)", pk.Name, strings.Join(pk.Evidence, "; "))
+		}
+		// The packer hid the strings and kept the list of libraries, so the
+		// list is read for what the strings would have said. An installer
+		// stub unpacks somebody else's program and is not asked.
+		if !installerStubs[pk.Name] {
+			if hits := packedCredentialImports(p); len(hits) > 0 {
+				add("packer.credential-imports", CatPacker, 3, techCredDump, "packed, and its import table still names the credential stores' own libraries (%s)", strings.Join(hits, ", "))
+			}
 		}
 	}
 

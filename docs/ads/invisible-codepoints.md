@@ -29,11 +29,13 @@ detector sees the carrier, not the plaintext; it cannot say what was
 encoded.
 
 ## False Positives
-70 of 70,102 benign text artifacts (0.10 %): a stray ZERO WIDTH SPACE pasted
+69 of 70,200 benign text artifacts (0.10 %): a stray ZERO WIDTH SPACE pasted
 into documentation or a translation file, source files that enumerate
-Unicode categories, a stray byte-order mark mid-file. 348 legitimate uses
-were excused by the context rules; the Khmer and RTL rules exist because
-that measurement found them.
+Unicode categories, a stray byte-order mark mid-file. 35,187 legitimate uses
+were excused by the context rules — 21,939 emoji sequences and 11,258 emoji
+presentation selectors, 1,635 joining-script joiners, 126 subdivision flags, 84
+byte-order marks, 74 spaceless-script spaces and 71 bidirectional controls.
+The Khmer and RTL rules exist because that measurement found them.
 
 ## Validation
 `scanner/stego/stego_test.go` fixtures for every class and every excuse;

@@ -110,7 +110,7 @@ corroborate each other, and never lowers anything.
 | **Firmware** | `cau firmware` | a UEFI image's module inventory, through LZMA and nested volumes, with every module body run through the YARA rules |
 | **Hardware identity** | `cau hwid` | DMI, NIC addresses, TPM PCRs and the entropy source, with `--record` and `--check` against a baseline, and `--redact` for sharing |
 | **Threat intel** | `cau intake` | STIX, MISP, MalwareBazaar, LOLDrivers and TAXII 2.1 with a persisted cursor, recording the provenance of every signature |
-| **SIEM delivery** | `cau scan --format`, `--sink-url`, `--wazuh-url` | thirteen formats, including ECS, CEF, LEEF, GELF, RFC 5424 syslog and OTLP, delivered over UDP, TCP, TLS or HTTPS. Free, and `cau defend` streams to Wazuh by itself |
+| **SIEM delivery** | `cau scan --format`, `--sink-url`, `--wazuh-url` | fourteen formats, including STIX, ECS, CEF, LEEF, GELF, RFC 5424 syslog and OTLP, delivered over UDP, TCP, TLS or HTTPS. Free, and `cau defend` streams to Wazuh by itself |
 | **Honesty** | `cau honesty` | one document of what is covered, what was measured and whether the content is intact, with no overall score |
 | **Supply chain** | `cau bundle sbom`, `cau verify-self` | a reproducible CycloneDX SBOM per binary, and signed release manifests. `cau update` refuses an older signed bundle |
 
@@ -174,20 +174,24 @@ failed, 4 usage.
 
 ## Measured, not asserted
 
+Every row below was re-derived on `v0.3.0-2-g8cdb25b` (2026-11-11) unless the
+row says otherwise. Re-run them with `make eval-lab`, `make eval`, and the
+measurement tests named in [docs/evaluation.md](docs/evaluation.md).
+
 | Claim | Where it was measured | Result |
 |---|---|---|
 | heuristics stay quiet on real tools | 349 files, Kali's Windows tool set | detections 60 → 28 after the rescoring; credential dumpers and injectors still detected |
 | static structure does not flag packed benign tools | 49 PE files in the same set | 43 score 0, nothing crosses the threshold, UPX and ASPack named below it |
-| static structure stays quiet on a Linux system | 4,974 ELF files under Kali's `/usr/bin`, `/usr/sbin`, `/usr/lib/x86_64-linux-gnu`, `/usr/libexec`, `/usr/lib/systemd`; 40 kernel modules | 0 cross the threshold, 21 carry one weight-1 observation, every module scores 0, a UPX-packed `ls` scores 6 with the packer named |
-| invisible-codepoint pass is usable on real text | 70,102 benign text artifacts | 0.10 % false positives, 348 legitimate uses excused by named rules |
+| static structure stays quiet on a Linux system | 4,999 ELF files under Kali's `/usr/bin`, `/usr/sbin`, `/usr/lib/x86_64-linux-gnu`, `/usr/libexec`, `/usr/lib/systemd` (7,301 files walked); 40 kernel modules | 0 cross the threshold, 21 carry one weight-1 observation, every module scores 0, a UPX-packed `ls` scores 6 with the packer named |
+| invisible-codepoint pass is usable on real text | 70,200 benign text artifacts | 69 detections (0.10 %), 35,187 legitimate uses excused by named rules |
 | fusion adds no false positives | 349 files | 0 fused-only detections, 0 new false positives |
 | the network sensor stays quiet on an ordinary host | a synthetic eight-daemon host (sshd, systemd-resolved, nginx, firefox, curl, postgres and a developer's `python3 -m http.server`), and a stock Kali desktop read **as root**: 48 sockets, 40 of them attributed to a process | 0 findings at the shipped threshold in both. At `--threshold 1` the live host lists 4 sockets as inventory — NetworkManager's raw ICMPv6 socket and ARP packet socket, and wpa_supplicant's two 802.1X ones — and nothing sums to the threshold. One host and one run, not a fleet |
 | the root-level read is what found the one real false positive | the same stock host, before the fix | NetworkManager scored 5 — exactly the threshold — because a raw socket (3) and an ARP packet socket (2) shared one subject. Unprivileged runs had hidden it: a socket whose holder cannot be read has no executable to group by. The capture classes now weigh **who holds the socket** over what it is (packaged: 2 and 1; unpackaged: 6 and 3), and `TestNetworkManagerShapeStaysQuiet` pins it |
 | the time-based analytics stay quiet on real traffic | the same host, `--interval 20s --threshold 1` for 10 samples over 3.3 minutes, during ordinary desktop use | 0 beaconing, gateway-MAC-churn and sweep findings; the only classes that fired across all 10 samples were the same 4 inventory sockets each time. The window was capable of producing a beacon — a 20-second poller would have made 10 connections in it, well past the 4 the analytic needs — so the zero is meaningful rather than vacuous. It does **not** cover a slow beacon: a 60-second cadence makes only 3 connections in 3.3 minutes and could not have been detected either way |
 | blocking is reversible and leaves the host's firewall as it was | a real kernel: block two addresses, list them back, unblock one, `cau net clear` | the `inet cau` table carried both elements with kernel-side expiry (`timeout 1h expires 59m47s`), `cau net blocks` read them back through real `nft -j` output, and after `clear` the `nft list ruleset` digest was byte-identical to the one taken before the first block, with 0 tables left. Re-applying the ruleset left 8 rules, not 16, and did not drop the live element |
 | the response policy refuses what the host needs | every address class a machine could be asked to block | loopback, unspecified, multicast, link-local, this host's own addresses, its default gateways and its configured resolvers are refused with a reason; `netblock.Check` is a pure function and tested as one |
-| encoded-executable detection is low-noise | 159,339 benign files (Kali doc/python/nmap/metasploit trees) | 0.020 % detections, every one a genuine embedded encoded executable |
-| **detection rate on tools the rules were not written from** | 280 real offensive samples held out by tool (`make eval-lab`) | **61.1 %, up from 25.4 %**, 6/2,431 false positives; public tooling, not a malware detection rate, see [the caveats](docs/evaluation.md#the-lab-corpus) |
+| encoded-executable detection is low-noise | 139,860 benign files (Kali doc/python/nmap/metasploit trees) | 0.019 % detections, every one a genuine embedded encoded executable |
+| **detection rate on tools the rules were not written from** | 280 real offensive samples held out by tool (`make eval-lab`) | **63.9 %, up from 25.4 %**, 6 false positives in 2,398 benign files (0.25 %); public tooling, not a malware detection rate, see [the caveats](docs/evaluation.md#the-lab-corpus) |
 | false positives across a wide benign sweep | 25,000 files, held-out excluded | 0.15 %; all 4 hits from the behavioural pass are genuine offensive material |
 | a dropped script is flagged as it lands | `cau defend` on a 12-core host, the real binary through the real watcher, a one-line PHP file | median under 1 ms on a quiet host, 7 ms during a 20,000-file sweep; worst seen 141 ms, in the first instant after start. At load 15 to 25: median 3 to 85 ms, worst 158 ms. The quiet-host figures predate the scanning changes; on the final build, measured only at load 31 to 35: median 23 to 177 ms |
 | a dropped script and the cron entry that runs it become one confirmed incident | same, through the real persistence audit | median 3.4 ms on a quiet host, 13 ms during a sweep; worst seen 244 ms. At load 15 to 25: median 21 to 176 ms, worst 337 ms |
@@ -197,7 +201,7 @@ failed, 4 usage.
 | kernel guards load and behave | the running kernel in QEMU, real verifier and real `execve` (`cau-kernel`: `make vm-test`) | 57/57 scenarios through the real CLI, including `ssh host cmd` shells, inetd listeners, blocking a running file, the guard's process identity and fail-open |
 | the response really happens, and only where it should | the running kernel in QEMU, the real binary with its defaults as real root (`make vm-respond`) | 19/19: a shell on a TCP socket and a deleted binary stopped, one killed, a file moved to the vault and caught again when re-dropped; argv text, `/etc` and PID 1 left alone |
 | nothing regresses silently | `corpus/smoke` on every push | 100 % recall, 0 false positives, gated in CI against the committed baseline |
-| coverage claims are derived, not typed | `cau coverage` on every push | 59 techniques with content and no declared gaps (3 held honestly as `partial`), gated against `baselines/attack-coverage.txt`; every bundled rule passes `cau rules lint` |
+| coverage claims are derived, not typed | `cau coverage` on every push | 95 techniques with content — 92 covered, 3 held honestly as `partial` — and no declared gaps, gated against `baselines/attack-coverage.txt`; every bundled rule passes `cau rules lint` |
 
 Details and caveats in [docs/evaluation.md](docs/evaluation.md).
 

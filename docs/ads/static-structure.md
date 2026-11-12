@@ -44,7 +44,7 @@ members are not parsed yet.
 ## False Positives
 PE: none above the threshold on 49 tool-set binaries; UPX-packed `wget.exe`
 scores 7 and ASPack-packed `klogger.exe` 6, both rendered as low suspicion
-with the packer named. ELF: 0 of 4,974 system files and 40 kernel modules
+with the packer named. ELF: 0 of 4,999 system files and 40 kernel modules
 reach the threshold; 21 carry one weight-1 observation (launcher stubs,
 vendor section names); a UPX-packed `ls` scores 6.
 

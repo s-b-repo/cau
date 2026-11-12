@@ -38,7 +38,7 @@ func TestBuildGroupsContentByTechnique(t *testing.T) {
 	if cred == nil {
 		t.Fatal("T1003 missing")
 	}
-	if strings.Join(cred.Sources, ",") != "heuristic,tradecraft,yara" || cred.Tier != TierMalicious || cred.Name != "OS Credential Dumping" {
+	if strings.Join(cred.Sources, ",") != "heuristic,static,tradecraft,yara" || cred.Tier != TierMalicious || cred.Name != "OS Credential Dumping" {
 		t.Errorf("T1003 = %+v", cred)
 	}
 	if find(m, "T1490") == nil || find(m, "T1486") == nil {
@@ -214,7 +214,10 @@ func TestRenderers(t *testing.T) {
 		case "T1542":
 			gapSeen = tq["score"].(float64) == 0 && tq["color"] == "#d9d9d9"
 		case "T1003":
-			credSeen = tq["score"].(float64) == 3 && strings.Contains(tq["comment"].(string), "mimikatz_strings")
+			// The score is the number of independent detectors with content:
+			// heuristic, static (a packed binary whose imports still read
+			// credentials), tradecraft and yara.
+			credSeen = tq["score"].(float64) == 4 && strings.Contains(tq["comment"].(string), "mimikatz_strings")
 		}
 	}
 	if !gapSeen || !credSeen {
