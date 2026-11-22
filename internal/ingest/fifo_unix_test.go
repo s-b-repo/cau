@@ -1,3 +1,5 @@
+//go:build unix
+
 package ingest
 
 import (
@@ -74,18 +76,6 @@ func TestAFIFONamedDirectlyIsRefused(t *testing.T) {
 	case <-time.After(10 * time.Second):
 		t.Fatal("Collect blocked on a FIFO named directly")
 	}
-	if len(warnings) != 1 || !strings.Contains(warnings[0], "not a regular file") {
-		t.Errorf("warnings = %v", warnings)
-	}
-}
-
-// A directory with a telemetry name is skipped with a reason, not queued.
-func TestADirectoryNamedLikeTelemetryIsSkipped(t *testing.T) {
-	dir := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(dir, "nested.jsonl"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	_, warnings := NewReader(Options{}).Collect([]string{dir})
 	if len(warnings) != 1 || !strings.Contains(warnings[0], "not a regular file") {
 		t.Errorf("warnings = %v", warnings)
 	}

@@ -5,7 +5,19 @@ set -eu
 [ "$#" -eq 2 ] || { echo "usage: $0 ARTIFACT_ROOT DIST" >&2; exit 2; }
 artifacts=$1
 dist=$2
-mkdir -p "$dist"
+scripts=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+stage=$(mktemp -d)
+trap 'rm -rf "$stage"' EXIT HUP INT TERM
+
+stage_package() {
+    source=$1
+    asset=$2
+    [ ! -e "$stage/$asset" ] && [ ! -e "$dist/$asset" ] && [ ! -L "$dist/$asset" ] || {
+        echo "duplicate release asset: $asset" >&2; exit 1;
+    }
+    cp -- "$source" "$stage/$asset"
+    python3 "$scripts/check-release-package.py" "$stage/$asset"
+}
 
 for arch in amd64 arm64; do
     for distro in debian-trixie kali-rolling; do
@@ -15,8 +27,7 @@ for arch in amd64 arm64; do
         }
         name=$(basename "$1")
         if [ "$distro" = kali-rolling ]; then name="cau-kali_${name#cau_}"; fi
-        [ ! -e "$dist/$name" ] || { echo "duplicate release asset: $name" >&2; exit 1; }
-        cp "$1" "$dist/$name"
+        stage_package "$1" "$name"
     done
 done
 for pair in amd64:x86_64 arm64:aarch64; do
@@ -34,15 +45,16 @@ for pair in amd64:x86_64 arm64:aarch64; do
         echo "expected exactly one Arch/${package_arch} package" >&2; exit 1;
     }
     name=$(basename "$1")
-    [ ! -e "$dist/$name" ] || { echo "duplicate release asset: $name" >&2; exit 1; }
-    cp "$1" "$dist/$name"
+    stage_package "$1" "$name"
     # Keep optional debug packages as release assets too, when makepkg emits
     # them. Their absence does not excuse a missing main package above.
     for debug in "$artifacts/cau-archlinux-${runner_arch}"/cau-debug-*-"${package_arch}".pkg.tar.zst \
                   "$artifacts/cau-archlinux-${runner_arch}"/cau-debug-*-"${package_arch}".pkg.tar.xz; do
         [ -f "$debug" ] || continue
         name=$(basename "$debug")
-        [ ! -e "$dist/$name" ] || { echo "duplicate release asset: $name" >&2; exit 1; }
-        cp "$debug" "$dist/$name"
+        stage_package "$debug" "$name"
     done
 done
+
+mkdir -p "$dist"
+cp -- "$stage/"* "$dist/"

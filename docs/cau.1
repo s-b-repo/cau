@@ -109,7 +109,7 @@ Boot state and boot entries, the WPBT table and PCI option ROMs.
 Scan the live process table for fileless, masquerade, injection and network
 shell indicators; \fB\-\-respond\fR stops or kills confirmed processes.
 .TP
-.B cau net \fR[\fPflags\fR] | \fR<\fBblock\fP|\fBunblock\fP|\fBblocks\fP|\fBclear\fR>
+.B cau net \fR[\fPflags\fR] | \fR<\fBblock\fP|\fBunblock\fP|\fBblocks\fP|\fBclear\fP|\fBdns\fR>
 Scan the network plane, read entirely from /proc and /etc: every socket the
 kernel holds, per network namespace, attributed to the process and the
 executable behind it, plus the resolver configuration and the neighbour table.
@@ -120,6 +120,8 @@ peers in cau's own nftables table or iptables chains; the block expires
 (\fB\-\-block\-ttl\fR, 1h by default) and never covers loopback, this host's own
 addresses, its gateways or its resolvers. The subcommands manage blocks by hand;
 \fBclear\fR removes exactly what cau created.
+Use \fBcau net dns\fR to read resolver configuration and compare it with
+expected nameserver addresses.
 .TP
 .B cau defend \fR[\fPflags\fR]
 Chain every detection layer: correlate process, file, network, persistence,
@@ -135,6 +137,20 @@ SSH keys, accounts, sudoers, PAM and set-uid programs in writable directories.
 .B cau installed \fR[\fPflags\fR]
 Audit installed-package maintainer scripts (dpkg and pacman) for root-level
 tradecraft.
+.TP
+.B cau inventory \fR[\fPflags\fR]
+Report registered software from local system package and installer sources,
+with per-provider coverage and text or JSON output.
+.TP
+.B cau patches \fR[\fPflags\fR]
+Assess cached OS updates and restart readiness. On APT systems this reports
+an offline, read-only upgrade simulation and the age of the local indexes.
+.TP
+.B cau capabilities \fR[\fPflags\fR]
+List platform-provided scan, watch, vault, inventory, patch and service
+capabilities and distinguish supported providers from unavailable integrations.
+Use \fB\-\-format json\fR for the versioned report. Provider readiness and
+service state have separate checks.
 .TP
 .B cau feed \fR<\fBlist\fP|\fBcheck\fP|\fBupdate\fR>
 Manage the local abuse-intel feed from its offline cache.

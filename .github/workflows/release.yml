@@ -42,15 +42,6 @@ concurrency:
   # worse than a late one.
   cancel-in-progress: false
 
-env:
-  # Hex-encoded Ed25519 signing key (seed or full). Set this repository
-  # secret to produce signed releases; without it the release is published
-  # unsigned (and `cau verify-self` / `cau update` have nothing to trust).
-  CAU_RELEASE_SIGNING_KEY: ${{ secrets.CAU_RELEASE_SIGNING_KEY }}
-  # The matching Ed25519 public key (hex), a repository variable or secret.
-  # Published as a release asset and used to self-verify before publishing.
-  CAU_RELEASE_PUBLIC_KEY: ${{ vars.CAU_RELEASE_PUBLIC_KEY }}
-
 jobs:
   prepare:
     name: derive the version, check the packaging metadata, wait for the gates
@@ -178,8 +169,8 @@ jobs:
             exit 1
           fi
 
-  publish:
-    name: build, sign and publish
+  build:
+    name: build and stage public assets
     needs: prepare
     runs-on: ubuntu-24.04
     # Longer than a gate job: this job waits for the package workflow's run to
@@ -187,7 +178,7 @@ jobs:
     # there, and that run may still be in its last leg when this job starts.
     timeout-minutes: 45
     permissions:
-      contents: write
+      contents: read
       # The distro packages are staged in from that workflow's artifacts, and
       # the GITHUB_TOKEN can read another run's artifacts with nothing less.
       actions: read
@@ -197,6 +188,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           fetch-depth: 0
+          persist-credentials: false
 
       - uses: ./.github/actions/cau-env
 
@@ -299,82 +291,80 @@ jobs:
       # carried nothing but a link to the comparison.
       - name: Render the release notes
         env:
-          RELEASE_SIGNED: ${{ env.CAU_RELEASE_SIGNING_KEY != '' && '1' || '0' }}
+          RELEASE_SIGNED: '1'
         run: |
           set -euo pipefail
-          ./scripts/release-notes.sh "${{ needs.prepare.outputs.version }}" "$RUNNER_TEMP/release-notes.md"
+          ./scripts/release-notes.sh "${{ needs.prepare.outputs.version }}" release-notes.md
           # The notes are published, so a section that is missing or empty is
           # a failed release: a release that says nothing is worse than one
           # that says little.
-          if [ ! -s "$RUNNER_TEMP/release-notes.md" ]; then
+          if [ ! -s release-notes.md ]; then
             echo "::error::the release notes are empty"
             exit 1
           fi
-          head -20 "$RUNNER_TEMP/release-notes.md"
+          head -20 release-notes.md
 
-      - name: Sign the update bundle, the integrity baseline and the checksums
+      - name: Save staged release assets for signing
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: public-release-inputs
+          path: |
+            dist/
+            release-notes.md
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    name: sign, verify and publish
+    needs: [prepare, build]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    environment: release
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - uses: ./.github/actions/cau-env
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: public-release-inputs
+          path: release-inputs
+          digest-mismatch: error
+
+      - name: Check the transferred build inputs
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
+          SOURCE_SHA256: ${{ needs.build.outputs.archive_sha256 }}
         run: |
           set -euo pipefail
-          if [ -z "$CAU_RELEASE_SIGNING_KEY" ]; then
-            echo "::warning::CAU_RELEASE_SIGNING_KEY is not set; publishing an UNSIGNED release"
-            (cd dist && find . -maxdepth 1 -type f ! -name 'SHA256SUMS*' -print0 |
-              sort -z | xargs -0 sha256sum > SHA256SUMS)
-            exit 0
-          fi
-          # Write the key to a private temp file, sign, then shred it.
-          umask 077
-          KEYFILE="$(mktemp)"
-          printf '%s' "$CAU_RELEASE_SIGNING_KEY" > "$KEYFILE"
-          trap 'shred -u "$KEYFILE" 2>/dev/null || rm -f "$KEYFILE"' EXIT
-          version="${{ needs.prepare.outputs.version }}"
+          test -s release-inputs/release-notes.md
+          printf '%s  %s\n' "$SOURCE_SHA256" "release-inputs/dist/cau-$VERSION.tar.gz" |
+            sha256sum --strict --check
 
-          # 1) Signed signature-DB bundle, for `cau update`.
-          ./cau bundle update --db signatures/hashes.txt --sign-key "$KEYFILE" \
-            --out dist --db-version "$version" --min-engine "$version"
-
-          # 2) Signed detection-content integrity baseline (`cau selftest`).
-          ./cau selftest --record --sign-key "$KEYFILE" --manifest dist/integrity.json
-
-          # 3) The pinned public key, so `cau verify-self` has something to check
-          #    against on a machine that holds no repository secret.
-          if [ -n "$CAU_RELEASE_PUBLIC_KEY" ]; then
-            printf '%s' "$CAU_RELEASE_PUBLIC_KEY" > dist/release-pubkey.hex
-          else
-            echo "::warning::CAU_RELEASE_PUBLIC_KEY is not set; the release will not self-verify before publishing"
-          fi
-
-          # 4) Signed SHA256SUMS over everything now in dist/ — the tarballs,
-          #    both binaries, the bundle, the integrity manifest and the distro
-          #    packages staged above. Order is the contract: a file staged after
-          #    this line ships unsigned, which is how the integrity manifest and
-          #    the public key used to ship.
-          #    The binary thereby references itself: its own hash is in a file it
-          #    can fetch and verify against the pinned key.
-          mapfile -d '' release_files < <(find dist -maxdepth 1 -type f ! -name 'SHA256SUMS*' -print0 | sort -z)
-          ./cau bundle checksums --sign-key "$KEYFILE" --out dist "${release_files[@]}"
-
-      - name: Verify the signed artifacts before publishing
-        if: env.CAU_RELEASE_SIGNING_KEY != '' && env.CAU_RELEASE_PUBLIC_KEY != ''
-        run: |
-          # A release that cannot verify itself must not ship: the built binary
-          # computes its own SHA-256 and checks it against the signed
-          # SHA256SUMS above, signature before hash.
-          ./cau verify-self --from dist --pubkey dist/release-pubkey.hex \
-            --name "cau-${{ needs.prepare.outputs.version }}-linux-amd64"
+      - name: Sign the update bundle, baseline and all release checksums
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
+          CAU_RELEASE_SIGNING_KEY: ${{ secrets.CAU_RELEASE_SIGNING_KEY }}
+          CAU_RELEASE_PUBLIC_KEY: ${{ vars.CAU_RELEASE_PUBLIC_KEY }}
+        run: bash scripts/sign-release.sh "$VERSION" release-inputs/dist
 
       - uses: softprops/action-gh-release@8a0cd651e5b2365bd640854a3fa5dfc70e4875f3 # v3
         with:
           # dist/ in full, the distro packages included: they were staged from
           # the package workflow before signing above, so this one step
           # publishes every asset the signed SHA256SUMS covers.
-          files: dist/*
+          files: release-inputs/dist/*
           fail_on_unmatched_files: true
           tag_name: ${{ needs.prepare.outputs.tag }}
           # The notes are the changelog's section for this version, rendered
           # above. GitHub's generator is not used: it does not recognise this
           # changelog's headings, and a release that carries only a link to the
           # comparison tells an operator nothing.
-          body_path: ${{ runner.temp }}/release-notes.md
+          body_path: release-inputs/release-notes.md
           # A beta or a release candidate is a pre-release; v1.2.0 is not.
           prerelease: ${{ needs.prepare.outputs.prerelease }}
           # The notes are written, so GitHub's own are not needed.
@@ -385,7 +375,7 @@ jobs:
 
   update:
     name: pin the released archive in the Arch recipe
-    needs: [prepare, publish]
+    needs: [prepare, build, publish]
     # Only a tagged release has an archive the Arch recipe can pin. A beta is
     # not the release the recipe builds from.
     if: needs.prepare.outputs.from_tag == 'true'
@@ -401,7 +391,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           VERSION: ${{ needs.prepare.outputs.version }}
-          SHA256: ${{ needs.publish.outputs.archive_sha256 }}
+          SHA256: ${{ needs.build.outputs.archive_sha256 }}
           BASE: ${{ github.event.repository.default_branch }} # audit:ok the branch name arrives through the environment, never pasted into the script
         run: |
           set -euo pipefail

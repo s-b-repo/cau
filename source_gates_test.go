@@ -253,9 +253,11 @@ func TestScanningNeverExecutesOrWritesSamples(t *testing.T) {
 
 // execAllowlist is every file that may import os/exec, with what it runs.
 var execAllowlist = map[string]string{
-	"cmd_ps.go":                     "runs the operator-named cau-kernel binary to block a confirmed process's executable (--kernel-bin)",
-	"internal/netblock/netblock.go": "runs nft or iptables to add and remove the operator-requested egress blocks",
-	"vmtest/main.go":                "PID 1 in a throwaway QEMU guest: starts cau and the processes it responds to. Never part of the shipped binary",
+	"cmd_ps.go":                         "runs the operator-named cau-kernel binary to block a confirmed process's executable (--kernel-bin)",
+	"internal/inventory/native_unix.go": "runs fixed dpkg-query, rpm, pkgutil and plutil commands for read-only software inventory",
+	"internal/netblock/netblock.go":     "runs nft or iptables to add and remove the operator-requested egress blocks",
+	"internal/patches/patches.go":       "runs fixed APT cache queries and simulation, sw_vers, or the offline Windows Update Agent query",
+	"vmtest/main.go":                    "PID 1 in a throwaway QEMU guest: starts cau and the processes it responds to. Never part of the shipped binary",
 }
 
 func TestProcessExecutionIsAllowlisted(t *testing.T) {

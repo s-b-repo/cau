@@ -3,10 +3,13 @@
 ```
 cau scan      [flags] [path ...]     scan files and directories
 cau ps        [flags]                scan the live process table over /proc; --respond stops confirmed processes
-cau net       [flags]                scan the network plane; block|unblock|blocks|clear for reversible drop rules
+cau net       [flags]                scan the network plane, manage blocks, or inspect resolver policy with dns
 cau persist   [flags]                audit the host for persistence (read-only)
 cau defend    [flags]                chain every layer: incidents, real-time file scanning, automatic response
 cau installed [flags]                audit already-installed packages' maintainer scripts
+cau inventory [flags]                list registered system software and collection coverage
+cau patches   [flags]                assess cached OS update and restart readiness
+cau capabilities [flags]             report platform capability providers and support
 cau firmware  [flags] <image>        parse a UEFI firmware image: inventory, FV integrity, rules
 cau boot-scan [flags]                read the boot chain, read-only: MBR/GPT, the ESP, Secure Boot, firmware tables
 cau hwid      [flags]                snapshot the hardware identity, and compare it with a baseline
@@ -901,6 +904,32 @@ not call it protection.
 
 Exit codes: 0 nothing flagged, 1 one or more findings, 3 the run failed, 4 usage.
 
+### cau net dns
+
+On Linux, this read-only command reports nameserver declarations from
+`/etc/resolv.conf`. When the configuration names a systemd-resolved stub,
+it also reads `/run/systemd/resolve/resolv.conf` for the flat upstream
+projection. The projection contains addresses. Per-interface routing,
+DNSSEC, and encrypted transports require their own observations.
+[systemd-resolved documentation](https://www.freedesktop.org/software/systemd/man/latest/systemd-resolved.service.html)
+
+```sh
+cau net dns --format json
+cau net dns --expect 192.0.2.53 --expect 2001:db8::53
+cau net dns --scope systemd-upstream --expect 192.0.2.53
+```
+
+`--expect` compares an unordered address set from the selected source.
+`--scope` selects `client` (default) or `systemd-upstream`. JSON schema version
+`"1"` includes observation time, source coverage and any missing or
+unexpected addresses. A partial source can identify an unexpected address.
+Establishing absence requires a complete source. Search and query names
+stay out of this report.
+
+Exit `0` means the collected sources were complete. Exit `1` means a
+comparison found drift. Exit `2` means coverage or comparison was incomplete
+or unsupported. Exit `3` signals an output error and `4` signals invalid usage.
+
 ## cau installed
 
 Audits the maintainer/install scripts of **already-installed** packages, in
@@ -929,6 +958,102 @@ as loose files, so it is reported as a **gap**, not silently skipped.
 
 Exit codes: `0` nothing flagged, `1` one or more packages flagged, `3` failed,
 `4` usage.
+
+## cau inventory
+
+Read registered system software locally. On Linux the providers cover dpkg,
+pacman and system RPM databases present on the host. Windows uses the two
+machine-wide uninstall registry views. macOS covers installer receipts and
+app bundles directly inside the shared Applications and Utilities directories.
+Collection scope excludes user profiles and unregistered portable software.
+
+```sh
+cau inventory
+cau inventory --format json
+```
+
+JSON schema version `"1"` has an OS, observation time, and a collection per
+provider and scope. Each collection reports its coverage and contains package
+IDs, names, native versions and architectures where available. An empty
+version means the installer record did not supply one. Some providers can
+report multiple installed versions of one ID. Only `complete` collections
+can establish absence within their stated scope. Keep positive observations
+from `partial` collections and represent `denied`, `unknown`, and
+`unsupported` explicitly.
+
+The exit code is `0` when all applicable collections completed and `2` when
+coverage is incomplete or unavailable. An output error exits `3`. Invalid
+usage exits `4`.
+
+## cau patches
+
+Report an offline assessment of OS updates and restart readiness. On APT
+systems, CAU uses the configured local package indexes and APT's ordinary
+upgrade simulation. The list contains the versions selected without adding
+or removing packages. The `deferred_updates` count includes upgrades that APT
+kept back, such as held packages or upgrades that require dependency changes.
+The assessment does not refresh indexes, download packages or change system
+state.
+
+```sh
+cau patches
+cau patches --format json
+```
+
+- `assessment_status` describes update coverage. It is `complete` for a usable
+  simulation with current indexes, `partial` for a usable simulation with stale
+  or incomplete evidence, `unknown` when the simulation cannot be verified, or
+  `unsupported` where a local assessment provider is unavailable.
+- `metadata` reports how many package indexes APT can see and the modification
+  time of the oldest one. A missing active index or source group makes the
+  evidence incomplete. CAU treats indexes more than seven days old as stale.
+  Index modification times can reflect repository publishing dates.
+- JSON uses `schema_version` `"1"`. `observed_at` records collection time and
+  `assessed_at` records when this invocation obtained a usable update result.
+  The `updates` array gives package IDs, architectures and native versions.
+  The result describes updates in the selected upgrade plan, without security
+  advisory or full-upgrade coverage.
+- On Windows the provider queries the configured Windows Update Agent cache.
+  It reports update IDs and revision numbers. `metadata.last_successful_search_at`
+  is the last successful search recorded by Automatic Updates and serves as a
+  freshness indicator. A missing or older-than-seven-days timestamp makes an
+  otherwise successful cached search `partial`.
+- `restart` is independent of the update assessment. A regular Linux
+  `/run/reboot-required` marker reports `pending`. An absent or unverifiable
+  marker leaves restart readiness `unknown`. Windows Update Agent can report
+  `pending` or `not_pending` for updates. On macOS the local result records the
+  installed OS version and build when available. Pending updates and restart
+  state require their own source.
+
+`--format` accepts `text` (default) or `json`. Exit `0` means the update
+assessment completed, even if it lists updates. Exit `2` delivers an
+incomplete or unsupported result, `3` signals an output error, and `4`
+signals invalid usage.
+
+## cau capabilities
+
+List the platform providers for scanning, live file watching, quarantine and
+restore, software inventory, patch assessment, and service health.
+
+```sh
+cau capabilities
+cau capabilities --format json
+```
+
+JSON schema version `"1"` includes `engine_version`, `os` and `architecture`
+using Go platform identifiers. Entries include `id`, `provider`, `status`,
+`reason` and a UTC `evaluated_at` timestamp. `unprobed` identifies a provider
+supported on this OS whose runtime readiness has yet to be checked.
+`unsupported` means the current build or packaging has no provider for that
+capability. The timestamp records when CAU evaluated platform support.
+
+Run `cau inventory` or `cau patches` for their current collection coverage.
+To compare Linux service health, query the packaged `cau-defend.service`
+with systemd. The discovery command performs no collection, scanning, vault
+operations, or service queries.
+
+Exit code `0` means a report was written and may include unsupported entries.
+Output errors exit `3`. Invalid usage exits `4`.
 
 ## cau firmware
 

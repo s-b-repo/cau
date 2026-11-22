@@ -14,7 +14,7 @@ _cau() {
     local -a top
     top=(
         scan hash cluster add-hash add-fuzzy eval heldout rules coverage honesty
-        quarantine canary peel evasion model firmware boot-scan hwid ps net persist defend installed feed intake update
+        quarantine canary peel evasion model firmware boot-scan hwid ps net persist defend installed inventory patches capabilities feed intake update
         selftest verify-self bundle version help
     )
 
@@ -46,7 +46,11 @@ _cau() {
                     sub=(list check update help)
                     ;;
                 net)
-                    sub=(block unblock blocks clear)
+                    sub=(block unblock blocks clear dns)
+                    ;;
+                inventory|patches|capabilities)
+                    _arguments '--format[output format]:format:(text json)'
+                    return
                     ;;
                 bundle)
                     sub=(update checksums sbom keygen)

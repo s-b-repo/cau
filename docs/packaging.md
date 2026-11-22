@@ -37,6 +37,22 @@ a leg that failed to build fails the release instead of shipping a package no
 digest authenticates. The checkout is full-depth, so `git describe` stamps the
 tag version into a package instead of a commit sha.
 
+The build job transfers the staged assets to the `release` environment's
+publish job. Configure that environment with the
+`CAU_RELEASE_SIGNING_KEY` secret and the matching
+`CAU_RELEASE_PUBLIC_KEY` variable. Publication requires both values and a
+verified signature. The signing step checks the signed manifest against all
+staged assets before the publisher runs.
+[GitHub environments](https://docs.github.com/en/actions/how-tos/deploy/configure-and-manage-deployments/manage-environments)
+
+The source-archive script checks selected source paths against the public
+repository layout before writing the archive. Release staging checks Debian,
+Kali and Arch package member paths against the neutral install list before
+copying the validated packages into `dist/`. Update these checks when an
+authorized public source area or installed path changes. `make pipeline-check`
+exercises both checks offline with harmless fixtures. It uses Python 3,
+`dpkg-deb` and zstd in addition to the ordinary shell tools.
+
 `scripts/package-smoke.sh` is distro-agnostic and asserts the behaviour a user
 buys the package for:
 

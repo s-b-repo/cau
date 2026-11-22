@@ -1,0 +1,111 @@
+name: native engine
+
+on:
+  pull_request:
+  push:
+    branches: [main, beta]
+    tags: ['v*']
+  schedule:
+    - cron: '19 3 * * 2'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  build:
+    name: ${{ matrix.os }} ${{ matrix.arch }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 35
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {os: linux, arch: amd64, runner: ubuntu-24.04}
+          - {os: linux, arch: arm64, runner: ubuntu-24.04-arm}
+          - {os: darwin, arch: arm64, runner: macos-15}
+          - {os: darwin, arch: amd64, runner: macos-15-intel}
+          - {os: windows, arch: amd64, runner: windows-2025}
+    env:
+      CGO_ENABLED: '1'
+      GOTOOLCHAIN: local
+      NATIVE_OS: ${{ matrix.os }}
+      NATIVE_ARCH: ${{ matrix.arch }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version: stable
+          check-latest: true
+          # CGO cache keys do not track changes to the runner's native libraries.
+          cache: false
+
+      - name: Install Linux libraries
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends gcc pkg-config libyara-dev
+      - name: Install macOS libraries
+        if: runner.os == 'macOS'
+        shell: bash
+        run: brew install yara pkgconf
+
+      - name: Set up Windows UCRT64
+        if: runner.os == 'Windows'
+        uses: msys2/setup-msys2@66cd2cce69caa17b53920067426061ca1de3a884 # v2.32.0
+        with:
+          msystem: UCRT64
+          path-type: inherit
+          install: >-
+            autoconf automake bison curl file flex libtool make
+            mingw-w64-ucrt-x86_64-gcc
+            mingw-w64-ucrt-x86_64-openssl
+            mingw-w64-ucrt-x86_64-pkgconf
+      - name: Build pinned libyara for Windows
+        if: runner.os == 'Windows'
+        shell: msys2 {0}
+        env:
+          YARA_VERSION: '4.5.8'
+          YARA_SHA256: c322414975ff6f701149856613afdcd92a7e6939c284c798ae3c85618197efaa
+        run: |
+          set -euo pipefail
+          work=$(mktemp -d)
+          trap 'rm -rf -- "$work"' EXIT
+          cd "$work"
+          curl --fail --location --retry 3 --silent --show-error \
+            --output yara.tar.gz "https://github.com/VirusTotal/yara/archive/v$YARA_VERSION.tar.gz"
+          printf '%s  %s\n' "$YARA_SHA256" yara.tar.gz | sha256sum --check --strict
+          tar -xzf yara.tar.gz
+          cd "yara-$YARA_VERSION"
+          ./bootstrap.sh
+          # Set the MinGW host explicitly because the build shell is MSYS.
+          CC=/ucrt64/bin/gcc ./configure --host="$(/ucrt64/bin/gcc -dumpmachine)" \
+            --prefix="$(cygpath -m /ucrt64)" --enable-static --disable-shared --with-crypto
+          make -j"$(nproc)"
+          make install
+          test -f /ucrt64/lib/libyara.a
+          test "$(/ucrt64/bin/pkgconf --modversion yara)" = "$YARA_VERSION"
+
+      - name: Build and verify native executables on Linux and macOS
+        if: runner.os != 'Windows'
+        shell: bash
+        run: bash scripts/native-smoke.sh
+      - name: Build and verify native executables on Windows
+        if: runner.os == 'Windows'
+        shell: msys2 {0}
+        run: bash scripts/native-smoke.sh
+
+      - name: Save native build evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: cau-native-evidence-${{ matrix.os }}-${{ matrix.arch }}-${{ github.sha }}
+          path: native-out/*.txt
+          if-no-files-found: ignore

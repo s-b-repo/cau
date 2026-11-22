@@ -19,7 +19,7 @@ _cau() {
     prev="${COMP_WORDS[COMP_CWORD-1]}"
 
     top="scan hash cluster add-hash add-fuzzy eval heldout rules coverage honesty
-quarantine canary peel evasion model firmware boot-scan hwid ps net persist defend installed feed intake update selftest
+quarantine canary peel evasion model firmware boot-scan hwid ps net persist defend installed inventory patches capabilities feed intake update selftest
 verify-self bundle completion version help"
 
     # ── flags ────────────────────────────────────────────────────────────────
@@ -43,7 +43,7 @@ verify-self bundle completion version help"
 -sink-url -sink-format -sink-index -sink-auth-env -sink-ca -sink-insecure -sink-timeout
 -provenance -provenance-root"
                         ;;
-                    hash)
+                    hash|inventory|patches|capabilities)
                         flags="-format"
                         ;;
                     cluster)
@@ -96,7 +96,11 @@ verify-self bundle completion version help"
                         flags="-format -threshold -proc-root -feed -respond -respond-score -interval -block-exe -kernel-bin -kernel-events"
                         ;;
                     net)
-                        flags="-format -threshold -feed -proc-root -etc-root -interval -respond -block-ttl -sever -dry-run -backend -ledger -reason"
+                        if [[ ${COMP_WORDS[2]} == dns ]]; then
+                            flags="-format -expect -scope -etc-root -run-root"
+                        else
+                            flags="-format -threshold -feed -proc-root -etc-root -interval -respond -block-ttl -sever -dry-run -backend -ledger -reason"
+                        fi
                         ;;
                     persist)
                         flags="-root -format -threshold -all"

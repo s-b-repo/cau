@@ -133,9 +133,15 @@ date=$(awk -v want="$version" '
     echo "sha256sum --ignore-missing -c SHA256SUMS"
     echo '```'
     echo
-    echo "The engine checks itself against that manifest: \`cau verify-self --from .\`"
-    echo "recomputes the running binary's digest and compares it with the signed"
-    echo "one, so a tampered download is refused rather than run."
+    if [ "${RELEASE_SIGNED:-0}" = "1" ]; then
+        echo "With the manifest and its signature in the current directory and an"
+        echo "independently authenticated release key, verify the running CAU"
+        echo "binary from the Linux amd64 release:"
+        echo
+        echo '~~~sh'
+        printf '%s\n' "cau verify-self --from . --pubkey /path/to/trusted-release-pubkey.hex --name cau-${version}-linux-amd64"
+        echo '~~~'
+    fi
     echo
     echo "Full changelog: [CHANGELOG.md](https://github.com/s-b-repo/cau/blob/main/CHANGELOG.md)."
     echo "Comparison with the previous release: <https://github.com/s-b-repo/cau/compare/v${version}%5E...v${version}>."

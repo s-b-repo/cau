@@ -87,12 +87,15 @@ Usage:
   cau hwid      [flags]                snapshot the hardware identity (DMI, NIC addresses, TPM PCRs) and compare it
                                        with a recorded baseline; what cannot be verified is listed, never assumed
   cau ps        [flags]                scan the live process table (/proc) for fileless/masquerade/injection/network shells; --respond stops or kills confirmed ones
-  cau net       [flags] | block|unblock|blocks|clear
+  cau net       [flags] | block|unblock|blocks|clear|dns
                                        scan the network plane (/proc sockets attributed to processes, resolver, neighbours) for
                                        fileless egress, bind shells, known-bad peers, DNS escape, sweeps, beaconing; --respond blocks
   cau defend    [flags]                chain every layer: correlate incidents, watch files in real time, respond to confirmed attacks
   cau persist   [flags]                audit the host for persistence (preload, cron, systemd, rc files, keys, accounts, PAM, SUID)
   cau installed [flags]                audit installed-package maintainer scripts (dpkg/pacman) for tradecraft
+  cau inventory [flags]                report registered system software from local package and installer records
+  cau patches   [flags]                assess cached OS update and restart readiness
+  cau capabilities [flags]             report platform capability providers and support
   cau feed      <subcommand>           manage the abuse-intel feed (list/check/update; offline cache + opt-in fetch)
   cau intake    --format <fmt> [flags] ingest a threat-intel feed into the signature DB
   cau update    (--from|--url) [flags] install a signed signature-DB bundle (fail-closed)
@@ -183,6 +186,12 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return cmdFeed(args[1:], stdout, stderr)
 	case "installed":
 		return cmdInstalled(args[1:], stdout, stderr)
+	case "inventory":
+		return cmdInventory(args[1:], stdout, stderr)
+	case "patches":
+		return cmdPatches(args[1:], stdout, stderr)
+	case "capabilities":
+		return cmdCapabilities(args[1:], stdout, stderr)
 	case "intake":
 		return cmdIntake(args[1:], stdout, stderr)
 	case "update":

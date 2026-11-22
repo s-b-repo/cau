@@ -39,6 +39,41 @@ multi-agent pane, not a crippled feature of the agent.
 
 ---
 
+## Endpoint management and platform coverage
+
+- [~] Collect registered software with `cau inventory --format json`. The
+  public implementation includes dpkg, pacman, system RPM, Windows machine
+  uninstall records, and macOS installer receipts and shared app bundles.
+  Each provider reports scope, observation time and coverage. Verify a benign
+  install, upgrade and removal on each target before claiming support.
+- [~] Assess updates with `cau patches --format json`. APT uses cached local
+  indexes and native package selection. Windows reads cached Windows Update
+  observations. macOS reports the installed build. Extend patch applicability
+  and restart providers as native evidence becomes available.
+- [x] Report the platform capability surface with `cau capabilities
+  --format json`. The result distinguishes available platform implementations
+  from missing integrations and marks available providers as unprobed.
+- [ ] Complete native package, install, upgrade and service tests for Linux,
+  Windows and macOS. Verify rules discovery, scan, quarantine and restore
+  from installed paths. Publish signed artifacts for verified targets.
+- [~] Public release publication requires a valid manifest signature and
+  matching asset digests. The signing step runs after a separate read-only
+  build. Verify the configured release environment and signed native
+  installers in hosted CI before promotion.
+- [ ] Extend endpoint controls with DNS policy and resolver health, bounded
+  ransomware behavior detection, auditable application control, firewall
+  health and reversible isolation. Prove observation and graceful degradation
+  on each platform before promoting prevention.
+- [ ] Add local posture and approved, typed operations for platform updates,
+  disk encryption, privilege, device control and recovery. Report the local
+  outcome and observed coverage. Keep standalone operations usable offline.
+- [~] Use versioned evidence contracts for managed integrations. The
+  standalone inventory and patch outputs feed the pilot's private device
+  report. Signed fleet policy assignment, rollouts and managed packaging
+  have their own acceptance gates.
+
+---
+
 ## Program status — what's shipped (engine)
 
 A roll-up of the OSS engine as it stands; the phase sections below hold the
@@ -1484,7 +1519,7 @@ against EDR. Countermeasures are integrity and redundancy — never camouflage:
 
 ---
 
-## Kernel-level support & anti-tamper (Linux-first; Windows stays console-side)
+## Kernel-level support & anti-tamper (Linux-first)
 
 Phase 7 #7 chose eBPF over a kernel driver deliberately. "Kernel level" here completes
 that story — plus the honest assumption underneath all of it: a compromised kernel cannot
@@ -1546,9 +1581,8 @@ eBPF **enforcement** program.
   telemetry. This is the kernel-native enforcement point without the out-of-tree-driver
   brittleness.
 - [ ] Minimal signed out-of-tree module only where BPF-LSM cannot serve, DKMS-packaged
-  with a kernel-version matrix in CI; never loads unsigned. Windows kernel components
-  land in the closed console sensor per the licensing-leak rule — the OSS engine ships
-  nothing it cannot verify.
+  with a kernel-version matrix in CI; never loads unsigned. Windows enforcement
+  requires independently verified native OS integration and installed tests.
 - [ ] "vkernel" mode for VM fleets, opt-in: KVM/QEMU guest introspection driven from the
   host via QMP — console queries process/memory/network state of a guest from a layer the
   guest's rootkit cannot see or unhook. Off by default; guest-free on the guest itself.
@@ -1558,9 +1592,15 @@ eBPF **enforcement** program.
   appraisal before the sensor starts; an unexpected PCR state puts the sensor into
   containment mode (self-protection section above) instead of scanning from a client the
   kernel could lie to.
-- [ ] Kernel hook inventory at rest and on change: kprobe/ftrace/livepatch/eBPF program
-  tables and LSM registrations diffed against a signed baseline — NOVEL-010's analytic
-  generalized to every attach point; anything not fleet-pinned alerts.
+- [~] Kernel hook inventory at rest and on change. The `cau-kernel` working
+  tree collects kprobes, active ftrace callbacks, livepatch state and ordered
+  LSM registrations. The Linux eBPF build also observes programs and links
+  that have no pin. The signed baseline compares object identity and source
+  visibility. Continuous registration monitoring remains open.
+- [~] Booted-kernel verification. The guard and file-backed hook tests
+  passed in QEMU on Linux `7.0.12+kali-amd64` and `7.1.5+kali-amd64`.
+  All 65 checks passed on each kernel, including drift when an unpinned BPF
+  guard adds a program and a link to the live inventory.
 - [ ] Kernel state drift checks: module list, taints and signature state against the
   provenance DB; kernel symbol-table diff (kallsyms with KASLR-aware rebasing) against
   the package-owned baseline. Firmware side remains Phase 8's surface — runtime
@@ -2917,6 +2957,12 @@ received file as the anchor.
 ---
 
 ## DNS plane — deep sweep
+
+`cau net dns` reports Linux client resolver declarations and the flat
+systemd-resolved upstream address projection when present. A supplied
+expected address set reports drift and preserves incomplete coverage.
+Per-interface routing, transport validation and resolver enforcement
+remain open.
 
 The packet-guard and cloud-adjacent sweeps touched DNS; this is the plane in full.
 Attackers increasingly operate at the resolution layer because it predates the

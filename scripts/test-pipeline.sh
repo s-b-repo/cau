@@ -49,17 +49,68 @@ fi
 echo "source archive refused the missing ref: $out"
 [ ! -e "$work/bad.tar.gz" ]
 
+# Test both ordinary checkout validation and the manifest used by the local
+# packaging workflow. The fixture uses a fake asset inside a reviewed root.
+mkdir -p marketing
+printf 'local draft\n' > marketing/draft.md
+"$scripts/source-archive.sh" 1.2.3 "$work/worktree.tar.gz" --worktree
+tar -tzf "$work/worktree.tar.gz" > "$work/worktree-members"
+if grep -Fq '/marketing/' "$work/worktree-members"; then
+    echo 'source archive included local marketing drafts' >&2; exit 1
+fi
+mkdir -p internal/frontend
+printf 'fixture dashboard\n' > internal/frontend/index.html
+if out=$("$scripts/source-archive.sh" 1.2.3 "$work/private-tree.tar.gz" --worktree 2>&1); then
+    echo 'source archive accepted private frontend worktree files' >&2; exit 1
+fi
+printf '%s\n' "$out" | grep -Fq 'public source boundary rejects internal/frontend/index.html'
+git add internal/frontend/index.html
+git commit -qm fixture-private-frontend
+if out=$("$scripts/source-archive.sh" 1.2.3 "$work/private-ref.tar.gz" 2>&1); then
+    echo 'source archive accepted a committed private frontend' >&2; exit 1
+fi
+printf '%s\n' "$out" | grep -Fq 'public source boundary rejects internal/frontend/index.html'
+[ ! -e "$work/private-tree.tar.gz" ]
+[ ! -e "$work/private-ref.tar.gz" ]
+
+if [ -e "$scripts/../.git" ]; then
+    (cd "$scripts/.." && "$scripts/source-archive.sh" 0.pipeline "$work/public-source.tar.gz")
+fi
+
 artifacts="$work/artifacts"
+deb="$work/deb"
+archpkg="$work/archpkg"
+debugpkg="$work/debugpkg"
+mkdir -p "$deb/DEBIAN" "$deb/usr/bin" "$archpkg/usr/bin" "$debugpkg/usr/lib/debug/usr/bin"
+printf 'fixture cau\n' > "$deb/usr/bin/cau"
+printf 'fixture cau-mcp\n' > "$deb/usr/bin/cau-mcp"
+cp "$deb/usr/bin/"* "$archpkg/usr/bin/"
+printf 'pkgname = cau\n' > "$archpkg/.PKGINFO"
+printf 'pkgname = cau-debug\n' > "$debugpkg/.PKGINFO"
+printf 'fixture debug file\n' > "$debugpkg/usr/lib/debug/usr/bin/cau.debug"
+
+make_deb() {
+    cat > "$deb/DEBIAN/control" <<EOF
+Package: cau
+Version: 1.2.3-1
+Architecture: $1
+Maintainer: Test fixture <test@example.invalid>
+Description: Harmless package-boundary fixture
+EOF
+    dpkg-deb --build --root-owner-group "$deb" "$2" >/dev/null
+}
+
 for arch in amd64 arm64; do
     for distro in debian-trixie kali-rolling; do
         mkdir -p "$artifacts/cau-${distro}-${arch}"
-        printf '%s/%s\n' "$distro" "$arch" > "$artifacts/cau-${distro}-${arch}/cau_1.2.3-1_${arch}.deb"
+        printf '%s/%s\n' "$distro" "$arch" > "$deb/usr/bin/cau"
+        make_deb "$arch" "$artifacts/cau-${distro}-${arch}/cau_1.2.3-1_${arch}.deb"
     done
 done
 for pair in amd64:x86_64 arm64:aarch64; do
     mkdir -p "$artifacts/cau-archlinux-${pair%:*}"
-    printf 'Arch/%s\n' "${pair#*:}" > "$artifacts/cau-archlinux-${pair%:*}/cau-1.2.3-1-${pair#*:}.pkg.tar.zst"
-    printf 'debug\n' > "$artifacts/cau-archlinux-${pair%:*}/cau-debug-1.2.3-1-${pair#*:}.pkg.tar.zst"
+    tar --zstd -cf "$artifacts/cau-archlinux-${pair%:*}/cau-1.2.3-1-${pair#*:}.pkg.tar.zst" -C "$archpkg" .
+    tar --zstd -cf "$artifacts/cau-archlinux-${pair%:*}/cau-debug-1.2.3-1-${pair#*:}.pkg.tar.zst" -C "$debugpkg" .
 done
 "$scripts/stage-release-packages.sh" "$artifacts" "$work/dist"
 [ "$(find "$work/dist" -type f | wc -l)" -eq 8 ]
@@ -67,6 +118,32 @@ for arch in amd64 arm64; do
     cmp "$artifacts/cau-debian-trixie-${arch}/cau_1.2.3-1_${arch}.deb" "$work/dist/cau_1.2.3-1_${arch}.deb"
     cmp "$artifacts/cau-kali-rolling-${arch}/cau_1.2.3-1_${arch}.deb" "$work/dist/cau-kali_1.2.3-1_${arch}.deb"
 done
+
+selected="$artifacts/cau-kali-rolling-arm64/cau_1.2.3-1_arm64.deb"
+cp "$selected" "$work/kali-original.deb"
+mkdir -p "$deb/etc/cau"
+printf 'fixture tenant profile\n' > "$deb/etc/cau/fixture-tenant.json"
+make_deb arm64 "$selected"
+if out=$("$scripts/stage-release-packages.sh" "$artifacts" "$work/private-dist" 2>&1); then
+    echo 'release staging accepted a tenant profile inside a neutral package' >&2; exit 1
+fi
+printf '%s\n' "$out" | grep -Fq 'public package boundary rejects'
+printf '%s\n' "$out" | grep -Fq 'etc/cau/fixture-tenant.json'
+[ ! -e "$work/private-dist" ]
+mv "$work/kali-original.deb" "$selected"
+
+selected="$artifacts/cau-archlinux-amd64/cau-1.2.3-1-x86_64.pkg.tar.zst"
+cp "$selected" "$work/arch-original.pkg.tar.zst"
+printf 'fixture managed connector\n' > "$archpkg/usr/bin/cau-managed-agent"
+tar --zstd -cf "$selected" -C "$archpkg" .
+if out=$("$scripts/stage-release-packages.sh" "$artifacts" "$work/connector-dist" 2>&1); then
+    echo 'release staging accepted a managed connector inside an Arch archive' >&2; exit 1
+fi
+printf '%s\n' "$out" | grep -Fq 'public package boundary rejects'
+printf '%s\n' "$out" | grep -Fq 'usr/bin/cau-managed-agent'
+[ ! -e "$work/connector-dist" ]
+mv "$work/arch-original.pkg.tar.zst" "$selected"
+
 # Neither a successful Debian leg nor a debug package can mask a missing leg.
 mv "$artifacts/cau-kali-rolling-arm64" "$work/missing-kali"
 if out=$("$scripts/stage-release-packages.sh" "$artifacts" "$work/missing-kali-dist" 2>&1); then
@@ -85,4 +162,14 @@ if out=$("$scripts/stage-release-packages.sh" "$artifacts" "$work/ambiguous-dist
     echo 'release staging accepted ambiguous package versions' >&2; exit 1
 fi
 echo "release staging refused the ambiguous versions: $out"
+
+mkdir "$work/unsigned-dist"
+if out=$(env -u CAU_RELEASE_SIGNING_KEY -u CAU_RELEASE_PUBLIC_KEY \
+    bash "$scripts/sign-release.sh" 1.2.3 "$work/unsigned-dist" 2>&1); then
+    echo 'release signing accepted an unsigned publication' >&2
+    exit 1
+fi
+printf '%s\n' "$out" | grep -Fq 'release signing requires the signing key and its trusted public key'
+[ ! -e "$work/unsigned-dist/SHA256SUMS" ]
+
 echo 'pipeline regressions: passed'

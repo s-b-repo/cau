@@ -21,6 +21,7 @@ func netUsage(w io.Writer) {
        cau net unblock <address>… [flags]
        cau net blocks [flags]
        cau net clear [flags]
+       cau net dns [flags]
 
 Point-in-time threat scan of the host's network plane, read entirely from /proc
 and /etc. Read-only: it opens no socket, sends no probe and captures no packets.
@@ -137,8 +138,10 @@ func cmdNet(args []string, stdout, stderr io.Writer) int {
 		switch args[0] {
 		case "block", "unblock", "blocks", "clear":
 			return cmdNetBlock(args[0], args[1:], stdout, stderr)
+		case "dns":
+			return cmdNetDNS(args[1:], stdout, stderr)
 		default:
-			return fail(stderr, report.ExitUsage, "unknown 'cau net' subcommand %q: block, unblock, blocks or clear", args[0])
+			return fail(stderr, report.ExitUsage, "unknown 'cau net' subcommand %q: block, unblock, blocks, clear or dns", args[0])
 		}
 	}
 

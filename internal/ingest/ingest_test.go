@@ -332,6 +332,18 @@ func TestReaderDoesNotConsumeAHalfWrittenLine(t *testing.T) {
 	}
 }
 
+// A directory with a telemetry name is skipped with a reason.
+func TestADirectoryNamedLikeTelemetryIsSkipped(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "nested.jsonl"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	_, warnings := NewReader(Options{}).Collect([]string{dir})
+	if len(warnings) != 1 || !strings.Contains(warnings[0], "not a regular file") {
+		t.Errorf("warnings = %v", warnings)
+	}
+}
+
 func TestReaderOverADirectory(t *testing.T) {
 	dir := t.TempDir()
 	for name, body := range map[string]string{
