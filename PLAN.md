@@ -53,6 +53,10 @@ multi-agent pane, not a crippled feature of the agent.
 - [x] Report the platform capability surface with `cau capabilities
   --format json`. The result distinguishes available platform implementations
   from missing integrations and marks available providers as unprobed.
+- [~] Expose kernel integrity to consumers. Linux capabilities can read an
+  optional local drift report with a verified baseline, current boot and
+  bounded observation age. Compare coverage and alert counts before using
+  those observations in managed reports.
 - [ ] Complete native package, install, upgrade and service tests for Linux,
   Windows and macOS. Verify rules discovery, scan, quarantine and restore
   from installed paths. Publish signed artifacts for verified targets.

@@ -37,6 +37,7 @@ complete -c cau -n __fish_use_subcommand -a patches -d 'assess cached OS update 
 complete -c cau -n '__fish_seen_subcommand_from patches' -l format -r -f -a 'text json' -d 'output format'
 complete -c cau -n __fish_use_subcommand -a capabilities -d 'report platform capability providers and support'
 complete -c cau -n '__fish_seen_subcommand_from capabilities' -l format -r -f -a 'text json' -d 'output format'
+complete -c cau -n '__fish_seen_subcommand_from capabilities' -l kernel-report -r -F -d 'saved Linux kernel drift report'
 complete -c cau -n __fish_use_subcommand -a feed -d 'manage the abuse-intel feed'
 complete -c cau -n __fish_use_subcommand -a intake -d 'ingest a threat-intel feed'
 complete -c cau -n __fish_use_subcommand -a update -d 'install a signed signature-DB bundle'

@@ -43,8 +43,11 @@ verify-self bundle completion version help"
 -sink-url -sink-format -sink-index -sink-auth-env -sink-ca -sink-insecure -sink-timeout
 -provenance -provenance-root"
                         ;;
-                    hash|inventory|patches|capabilities)
+                    hash|inventory|patches)
                         flags="-format"
+                        ;;
+                    capabilities)
+                        flags="-format -kernel-report"
                         ;;
                     cluster)
                         flags="-format -min-similarity -imphashes -max-in-memory"

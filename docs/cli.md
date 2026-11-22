@@ -1033,7 +1033,8 @@ signals invalid usage.
 ## cau capabilities
 
 List the platform providers for scanning, live file watching, quarantine and
-restore, software inventory, patch assessment, and service health.
+restore, software inventory, patch assessment, service health, and kernel
+integrity.
 
 ```sh
 cau capabilities
@@ -1049,8 +1050,15 @@ capability. The timestamp records when CAU evaluated platform support.
 
 Run `cau inventory` or `cau patches` for their current collection coverage.
 To compare Linux service health, query the packaged `cau-defend.service`
-with systemd. The discovery command performs no collection, scanning, vault
-operations, or service queries.
+with systemd.
+
+On Linux, add `--kernel-report /path/to/drift.json` to read the report
+produced by `cau-kernel drift --format json` with a verified baseline.
+Have a trusted local job write that report in a protected directory. CAU
+checks the schema, live scope, baseline status, current boot, and one-hour
+freshness window. It reports `observed` with the observation time, coverage
+and alert count, or `unknown` when the file cannot provide usable evidence.
+The report describes a local comparison. The boot identifier stays local.
 
 Exit code `0` means a report was written and may include unsupported entries.
 Output errors exit `3`. Invalid usage exits `4`.

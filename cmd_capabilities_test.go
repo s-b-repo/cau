@@ -33,6 +33,10 @@ func TestCapabilitiesPlatformMatrix(t *testing.T) {
 			want := map[string]string{
 				"scan": "cau-scan", "quarantine_restore": "cau-vault", "file_watch": test.watch,
 				"software_inventory": test.inventory, "patch_assessment": test.patches, "service_health": test.service,
+				"kernel_integrity": "none",
+			}
+			if test.os == "linux" {
+				want["kernel_integrity"] = "cau-kernel"
 			}
 			for _, item := range result.Capabilities {
 				p, ok := want[item.ID]
@@ -61,7 +65,7 @@ func TestCapabilitiesCLI(t *testing.T) {
 	if err := json.Unmarshal(stdout.Bytes(), &result); err != nil {
 		t.Fatal(err)
 	}
-	if result.SchemaVersion != "1" || result.OS != runtime.GOOS || result.Architecture != runtime.GOARCH || len(result.Capabilities) != 6 {
+	if result.SchemaVersion != "1" || result.OS != runtime.GOOS || result.Architecture != runtime.GOARCH || len(result.Capabilities) != 7 {
 		t.Fatalf("unexpected JSON report %+v", result)
 	}
 	stdout.Reset()

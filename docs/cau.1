@@ -147,10 +147,10 @@ Assess cached OS updates and restart readiness. On APT systems this reports
 an offline, read-only upgrade simulation and the age of the local indexes.
 .TP
 .B cau capabilities \fR[\fPflags\fR]
-List platform-provided scan, watch, vault, inventory, patch and service
+List platform-provided scan, watch, vault, inventory, patch, service and kernel
 capabilities and distinguish supported providers from unavailable integrations.
-Use \fB\-\-format json\fR for the versioned report. Provider readiness and
-service state have separate checks.
+Use \fB\-\-format json\fR for the versioned report or
+\fB\-\-kernel-report file\fR to read a saved Linux kernel drift observation.
 .TP
 .B cau feed \fR<\fBlist\fP|\fBcheck\fP|\fBupdate\fR>
 Manage the local abuse-intel feed from its offline cache.

@@ -21,11 +21,12 @@ type capability struct {
 }
 
 type capabilityReport struct {
-	SchemaVersion string       `json:"schema_version"`
-	EngineVersion string       `json:"engine_version"`
-	OS            string       `json:"os"`
-	Architecture  string       `json:"architecture"`
-	Capabilities  []capability `json:"capabilities"`
+	SchemaVersion   string                    `json:"schema_version"`
+	EngineVersion   string                    `json:"engine_version"`
+	OS              string                    `json:"os"`
+	Architecture    string                    `json:"architecture"`
+	Capabilities    []capability              `json:"capabilities"`
+	KernelIntegrity *kernelCapabilityEvidence `json:"kernel_integrity,omitempty"`
 }
 
 func cmdCapabilities(args []string, stdout, stderr io.Writer) int {
@@ -35,15 +36,17 @@ func cmdCapabilities(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprint(stderr, `Usage: cau capabilities [flags]
 
 List capability providers and their platform support. This discovery command
-does not assess host readiness or change local state.
+can read an existing kernel drift report when requested.
 
 Flags:
-  --format <fmt>  text or json (default text)
+  --format <fmt>         text or json (default text)
+  --kernel-report <file> Linux kernel drift JSON saved by a trusted local job
 
 Exit codes: 0 report written, 3 output error, 4 usage.
 `)
 	}
 	format := fs.String("format", "text", "output format: text or json")
+	kernelReport := fs.String("kernel-report", "", "read a saved Linux kernel drift report")
 	if err := fs.Parse(interspersed(fs, args)); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return report.ExitOK
@@ -57,6 +60,9 @@ Exit codes: 0 report written, 3 output error, 4 usage.
 		return fail(stderr, report.ExitUsage, "capabilities accepts no positional arguments")
 	}
 	result := buildCapabilities(runtime.GOOS, runtime.GOARCH, time.Now().UTC())
+	if *kernelReport != "" && result.OS == "linux" {
+		result.readKernelEvidence(*kernelReport)
+	}
 	var err error
 	if *format == "json" {
 		err = writeJSON(stdout, result)
@@ -65,6 +71,9 @@ Exit codes: 0 report written, 3 output error, 4 usage.
 		fmt.Fprintf(&text, "CAU %s capabilities on %s/%s\n", result.EngineVersion, result.OS, result.Architecture)
 		for _, feature := range result.Capabilities {
 			fmt.Fprintf(&text, "%s: %s (%s) — %s\n", feature.ID, feature.Status, feature.Provider, feature.Reason)
+		}
+		if k := result.KernelIntegrity; k != nil {
+			fmt.Fprintf(&text, "  Kernel observation %s, %d drift alerts, %s coverage\n", k.ObservedAt.Format(time.RFC3339), k.AlertCount, k.Coverage)
 		}
 		_, err = io.WriteString(stdout, text.String())
 	}
@@ -90,12 +99,14 @@ func buildCapabilities(osName, architecture string, at time.Time) capabilityRepo
 	inventory := unsupported("software_inventory", "no system software inventory provider for this OS")
 	patch := unsupported("patch_assessment", "no local OS update and restart provider for this OS")
 	service := unsupported("service_health", "no packaged service health integration for this OS")
+	kernel := unsupported("kernel_integrity", "the kernel drift provider requires Linux")
 	switch osName {
 	case "linux":
 		watch = known("file_watch", "inotify", "watch attachment, scope and available watch quota were not checked")
 		inventory = known("software_inventory", "system-package-databases", "run cau inventory to assess dpkg, pacman or RPM collection")
 		patch = known("patch_assessment", "apt-upgrade-simulation", "run cau patches to check local APT, its cached indexes and restart evidence")
 		service = known("service_health", "systemd", "package installation and cau-defend.service health were not checked")
+		kernel = known("kernel_integrity", "cau-kernel", "use --kernel-report to read a local drift report")
 	case "windows":
 		inventory = known("software_inventory", "machine-uninstall-registry", "run cau inventory to assess the machine-wide registry views")
 		patch = known("patch_assessment", "windows-update-agent-cache", "run cau patches to check cached Windows updates and restart evidence")
@@ -105,6 +116,6 @@ func buildCapabilities(osName, architecture string, at time.Time) capabilityRepo
 	}
 	return capabilityReport{
 		SchemaVersion: "1", EngineVersion: version, OS: osName, Architecture: architecture,
-		Capabilities: []capability{scan, watch, vault, inventory, patch, service},
+		Capabilities: []capability{scan, watch, vault, inventory, patch, service, kernel},
 	}
 }

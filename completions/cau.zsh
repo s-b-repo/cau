@@ -48,8 +48,12 @@ _cau() {
                 net)
                     sub=(block unblock blocks clear dns)
                     ;;
-                inventory|patches|capabilities)
+                inventory|patches)
                     _arguments '--format[output format]:format:(text json)'
+                    return
+                    ;;
+                capabilities)
+                    _arguments '--format[output format]:format:(text json)' '--kernel-report[saved Linux kernel drift report]:file:_files'
                     return
                     ;;
                 bundle)
