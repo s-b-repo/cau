@@ -35,7 +35,7 @@ func scanDesktop(opts Options, threshold int) *Result {
 	if parent == nil {
 		parent = context.Background() // audit:ok compatibility for callers without a context, bounded below
 	}
-	ctx, cancel := context.WithTimeout(parent, desktop.Timeout)
+	ctx, cancel := context.WithTimeout(parent, desktop.QueryTimeout())
 	defer cancel()
 	snapshot := readNativeStartup(ctx)
 	result := &Result{Root: "host", Source: snapshot.source, Threshold: threshold, Incomplete: snapshot.incomplete}
