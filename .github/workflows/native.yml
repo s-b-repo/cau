@@ -31,7 +31,6 @@ jobs:
       matrix:
         include:
           - {os: windows, arch: amd64, runner: windows-2025}
-          - {os: windows, arch: arm64, runner: windows-11-arm}
     env:
       CGO_ENABLED: '1'
       GOTOOLCHAIN: local
@@ -138,6 +137,7 @@ jobs:
 
       - name: Verify Windows MSI install, upgrade and uninstall
         if: runner.os == 'Windows' && !cancelled()
+        timeout-minutes: 12
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'

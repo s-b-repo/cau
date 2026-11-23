@@ -19,8 +19,14 @@ if ((Test-Path -LiteralPath $install) -or (Get-Service CauDefend -ErrorAction Si
 $null = New-Item -ItemType Directory -Path $work
 function Invoke-Msi([string]$Operation, [string]$Package) {
     $log = "$Package.log"
+    Write-Output "Running Windows Installer $Operation for $(Split-Path -Leaf $Package)"
     $result = Start-Process "$env:SystemRoot/System32/msiexec.exe" `
-        -ArgumentList $Operation, ('"' + $Package + '"'), '/qn', '/norestart', '/l*v', ('"' + $log + '"') -Wait -PassThru
+        -ArgumentList $Operation, ('"' + $Package + '"'), '/qn', '/norestart', '/l*v', ('"' + $log + '"') -PassThru
+    if (-not $result.WaitForExit(120000)) {
+        $result.Kill()
+        if (Test-Path -LiteralPath $log) { Get-Content -Tail 80 -LiteralPath $log }
+        throw "Windows Installer timed out during $Operation"
+    }
     if ($result.ExitCode -ne 0) {
         if (Test-Path -LiteralPath $log) { Get-Content -Tail 80 -LiteralPath $log }
         throw "Windows Installer returned $($result.ExitCode) during $Operation"
@@ -28,6 +34,7 @@ function Invoke-Msi([string]$Operation, [string]$Package) {
 }
 
 function Assert-CauInventory([string[]]$Expected) {
+    Write-Output "Checking installed CAU versions [$Expected]"
     $output = & $inventoryExe inventory --format json
     if ($LASTEXITCODE -notin 0, 2) { throw "Inventory returned $LASTEXITCODE" }
     $snapshot = ($output -join "`n") | ConvertFrom-Json
@@ -42,6 +49,7 @@ function Assert-CauInventory([string[]]$Expected) {
 }
 
 try {
+    Write-Output "Building the Windows $Arch installer fixtures"
     & "$PSScriptRoot/build-windows-installer.ps1" -Payload $Payload -Version 0.0.1 -Output $older -Wix $Wix -Arch $Arch
     & "$PSScriptRoot/build-windows-installer.ps1" -Payload $Payload -Version 0.0.2 -Output $newer -Wix $Wix -Arch $Arch
     Assert-CauInventory @()
