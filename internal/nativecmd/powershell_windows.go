@@ -23,7 +23,9 @@ func PowerShell(ctx context.Context, script string) ([]byte, bool, error) {
 	systemDir := syscall.UTF16ToString(buffer[:n])
 	powershellDir := filepath.Join(systemDir, "WindowsPowerShell", "v1.0")
 	env := []string{"SystemRoot=" + filepath.Dir(systemDir), "PATH=" + systemDir, "PSModulePath=" + filepath.Join(powershellDir, "Modules")}
-	command := utf16.Encode([]rune(script))
+	// The redirected host writes progress records to stderr as CLIXML.
+	// Keep real warnings and errors visible to callers.
+	command := utf16.Encode([]rune("$ProgressPreference = 'SilentlyContinue'\n" + script))
 	encoded := make([]byte, len(command)*2)
 	for i, ch := range command {
 		binary.LittleEndian.PutUint16(encoded[2*i:], ch)
