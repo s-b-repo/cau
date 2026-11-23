@@ -47,14 +47,18 @@
 package procscan
 
 import (
+	"context"
+	"fmt"
 	"maps"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"sort"
 	"strconv"
 	"strings"
 
+	"github.com/s-b-repo/cau/internal/desktop"
 	"github.com/s-b-repo/cau/internal/intel"
 	"github.com/s-b-repo/cau/internal/parallel"
 	"github.com/s-b-repo/cau/scanner/linuxpkg"
@@ -99,7 +103,8 @@ type Finding struct {
 type Process struct {
 	// startTicks is the kernel's start time for this PID, which is what tells it
 	// from a later process that reused the number.
-	startTicks uint64
+	startTicks    uint64
+	nativeCreated uint64
 
 	PID      int       `json:"pid"`
 	PPID     int       `json:"ppid,omitempty"`
@@ -117,11 +122,14 @@ type Process struct {
 
 // Result is the whole-scan outcome.
 type Result struct {
-	Scanned    int       `json:"scanned"`
-	Unreadable int       `json:"unreadable"`
-	Threshold  int       `json:"threshold"`
-	Flagged    []Process `json:"flagged,omitempty"`
-	Warnings   []string  `json:"warnings,omitempty"`
+	Scanned       int       `json:"scanned"`
+	Unreadable    int       `json:"unreadable"`
+	Threshold     int       `json:"threshold"`
+	Flagged       []Process `json:"flagged,omitempty"`
+	Warnings      []string  `json:"warnings,omitempty"`
+	Source        string    `json:"source,omitempty"`
+	Coverage      string    `json:"coverage,omitempty"`
+	nativeParents map[int]int
 	// KernelRefused and KernelSeen count the guard's events in the window read,
 	// including processes that no longer exist.
 	KernelRefused int `json:"kernel_refused,omitempty"`
@@ -139,6 +147,7 @@ type Options struct {
 	// KernelEvents are exec events from the cau-kernel guard, matched to live
 	// processes by LoadKernelEvents' caller.
 	KernelEvents []KernelEvent
+	Context      context.Context
 }
 
 func (o Options) threshold() int {
@@ -200,6 +209,9 @@ var knownSystemNames = map[string]bool{
 // A read that stopped at one of the byte caps is reported as a warning naming
 // the process, so a partial look at a command line is never read as a whole one.
 func Scan(opts Options) *Result {
+	if runtime.GOOS != "linux" && opts.procRoot() == "/proc" {
+		return scanDesktop(opts)
+	}
 	root := opts.procRoot()
 	th := opts.threshold()
 	res := &Result{Threshold: th}
@@ -251,6 +263,7 @@ func Scan(opts Options) *Result {
 	kernel := indexKernelEvents(opts.KernelEvents, res)
 
 	scored := make([]Process, len(procs))
+	intelPartial := make([]bool, len(procs))
 	parallel.For(len(procs), 0, func(i int) {
 		rp := procs[i]
 		p := detect(rp, th)
@@ -260,28 +273,89 @@ func Scan(opts Options) *Result {
 		}
 		// Abuse-intel feed over the command line (kept out of the pure detect so
 		// detect stays feed-free and unit-testable).
-		if opts.Intel != nil && rp.cmdline != "" {
-			for _, h := range opts.Intel.MatchText(rp.cmdline) {
-				f := Finding{Class: "procscan.intel." + string(h.Kind), Score: 8, Technique: techProcInject,
-					Detail: "process command line references a known-bad " + string(h.Kind) + " from the abuse-intel feed", Evidence: h.Value}
-				p.Findings = append(p.Findings, f)
-				p.Score += f.Score
-			}
-		}
+		intelPartial[i] = addCommandIntel(&p, opts.Intel)
 		scored[i] = p
 	})
+	if i := slices.Index(intelPartial, true); i >= 0 {
+		res.Warnings = append(res.Warnings, fmt.Sprintf("partial scan: PID %d reached the command-line feed candidate limit", procs[i].pid))
+	}
 	for _, p := range scored {
 		if p.Score >= th {
 			res.Flagged = append(res.Flagged, p)
 		}
 	}
-	sort.Slice(res.Flagged, func(i, j int) bool {
-		if res.Flagged[i].Score != res.Flagged[j].Score {
-			return res.Flagged[i].Score > res.Flagged[j].Score
-		}
-		return res.Flagged[i].PID < res.Flagged[j].PID
-	})
+	sortFlagged(res.Flagged)
 	return res
+}
+
+func sortFlagged(flagged []Process) {
+	sort.Slice(flagged, func(i, j int) bool {
+		if flagged[i].Score != flagged[j].Score {
+			return flagged[i].Score > flagged[j].Score
+		}
+		return flagged[i].PID < flagged[j].PID
+	})
+}
+
+func addCommandIntel(p *Process, feed *intel.Feed) bool {
+	if feed == nil || p.Cmdline == "" {
+		return false
+	}
+	hits, truncated := feed.MatchTextReportsTruncation(p.Cmdline)
+	for _, h := range hits {
+		f := Finding{Class: "procscan.intel." + string(h.Kind), Score: 8, Technique: techProcInject,
+			Detail: "process command line references a known-bad " + string(h.Kind) + " from the abuse-intel feed", Evidence: h.Value}
+		p.Findings = append(p.Findings, f)
+		p.Score += f.Score
+	}
+	return truncated
+}
+
+func scanDesktop(opts Options) *Result {
+	parent := opts.Context
+	if parent == nil {
+		parent = context.Background() // audit:ok compatibility for callers without a context, bounded below
+	}
+	ctx, cancel := context.WithTimeout(parent, desktop.Timeout)
+	defer cancel()
+	snapshot := desktop.Processes(ctx)
+	result := &Result{Source: snapshot.Source, Coverage: "command-line", Scanned: len(snapshot.Rows),
+		Unreadable: snapshot.Partial, Threshold: opts.threshold(), Warnings: snapshot.Warnings}
+	if snapshot.Source == "windows-cim-process" || snapshot.Source == "macos-ps" {
+		result.nativeParents = make(map[int]int, len(snapshot.Rows))
+	}
+	if snapshot.Unavailable {
+		result.Coverage = "unavailable"
+		if snapshot.Source == "unsupported" {
+			result.Coverage = "unsupported"
+		}
+	} else if len(snapshot.Warnings) != 0 {
+		result.Coverage = "partial"
+	}
+	intelPartial := false
+	for _, row := range snapshot.Rows {
+		if result.nativeParents != nil {
+			result.nativeParents[row.PID] = row.Parent
+		}
+		p := Process{PID: row.PID, PPID: row.Parent, Comm: row.Name, Cmdline: row.Command, nativeCreated: row.Created}
+		if filepath.IsAbs(row.Image) {
+			p.Exe = filepath.Clean(row.Image)
+		}
+		p.Findings = cmdlineFindings(row.Command)
+		for _, finding := range p.Findings {
+			p.Score += finding.Score
+		}
+		intelPartial = addCommandIntel(&p, opts.Intel) || intelPartial
+		if p.Score >= result.Threshold {
+			result.Flagged = append(result.Flagged, p)
+		}
+	}
+	if intelPartial {
+		result.Coverage = "partial"
+		result.Warnings = append(result.Warnings, "partial scan: native command-line feed candidate limit reached")
+	}
+	sortFlagged(result.Flagged)
+	return result
 }
 
 // detect scores one process. Pure function of rp.

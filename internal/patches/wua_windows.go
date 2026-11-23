@@ -2,16 +2,10 @@ package patches
 
 import (
 	"context"
-	"encoding/base64"
-	"encoding/binary"
-	"path/filepath"
-	"syscall"
 	"time"
-	"unicode/utf16"
-	"unsafe"
-)
 
-var getSystemDirectory = syscall.NewLazyDLL("kernel32.dll").NewProc("GetSystemDirectoryW")
+	"github.com/s-b-repo/cau/internal/nativecmd"
+)
 
 // The Windows Update Agent stays on the configured update source, uses its
 // local cache, and is explicitly prevented from upgrading itself on search.
@@ -60,22 +54,7 @@ func collectWindows(ctx context.Context, result *Assessment) {
 	result.Source = "windows-update-agent-cache"
 	result.AssessmentStatus = Unknown
 	result.Restart = Restart{State: Unknown, Source: "windows-update-agent", Reason: "Windows Update Agent could not attest restart state"}
-	var buffer [32768]uint16
-	n, _, _ := getSystemDirectory.Call(uintptr(unsafe.Pointer(&buffer[0])), uintptr(len(buffer))) // audit:ok synchronous Win32 call with a UTF-16 array and its character count
-	if n == 0 || n >= uintptr(len(buffer)) {
-		result.Warnings = append(result.Warnings, "Windows system directory could not be located")
-		return
-	}
-	systemDir := syscall.UTF16ToString(buffer[:n])
-	powershellDir := filepath.Join(systemDir, "WindowsPowerShell", "v1.0")
-	env := []string{"SystemRoot=" + filepath.Dir(systemDir), "PATH=" + systemDir, "PSModulePath=" + filepath.Join(powershellDir, "Modules")}
-	command := utf16.Encode([]rune(wuaScript))
-	encoded := make([]byte, len(command)*2)
-	for i, ch := range command {
-		binary.LittleEndian.PutUint16(encoded[2*i:], ch)
-	}
-	output, warned, err := runCommand(ctx, filepath.Join(powershellDir, "powershell.exe"), env,
-		"-NoLogo", "-NoProfile", "-NonInteractive", "-EncodedCommand", base64.StdEncoding.EncodeToString(encoded))
+	output, warned, err := nativecmd.PowerShell(ctx, wuaScript)
 	if err != nil {
 		result.Warnings = append(result.Warnings, "Windows Update Agent query did not complete")
 		return

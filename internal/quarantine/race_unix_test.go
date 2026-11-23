@@ -1,16 +1,38 @@
-//go:build unix
+//go:build (linux || darwin) && cgo
 
 package quarantine
 
 import (
+	"crypto/sha256"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
-
-	"github.com/s-b-repo/cau/internal/safefs"
 )
+
+func readSourceForTest(t *testing.T, path string) (*quarantineSource, os.FileInfo, []byte) {
+	t.Helper()
+	canonical, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	source, err := openQuarantineSource(canonical, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(source.close)
+	info, err := source.file.Stat()
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := io.ReadAll(source.file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return source, info, data
+}
 
 // swapToSymlink is the attack the identity check refuses: the path named a
 // regular file when it was read, and a link to a file the response may remove
@@ -20,10 +42,7 @@ func TestRemoveOriginalRefusesASwappedSymlink(t *testing.T) {
 	precious := writeSample(t, work, "precious.log", []byte("service log nobody may delete\n"), 0o644)
 	suspect := writeSample(t, work, "suspect.bin", []byte("flagged bytes"), 0o644)
 
-	data, info, err := safefs.ReadFileNoFollow(suspect, maxEntrySize)
-	if err != nil {
-		t.Fatalf("read: %v", err)
-	}
+	source, info, data := readSourceForTest(t, suspect)
 	// The attacker's window: the name is taken away and replaced by a link.
 	if err := os.Remove(suspect); err != nil {
 		t.Fatal(err)
@@ -32,7 +51,7 @@ func TestRemoveOriginalRefusesASwappedSymlink(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	err = removeOriginal(suspect, info, int64(len(data)))
+	err := removeOriginal(source, info, int64(len(data)), sha256.Sum256(data))
 	if !errors.Is(err, ErrPathChanged) {
 		t.Fatalf("removeOriginal after a swap-to-symlink: err = %v, want ErrPathChanged", err)
 	}
@@ -56,14 +75,11 @@ func TestRemoveOriginalRefusesARewrittenFile(t *testing.T) {
 	work := t.TempDir()
 	p := writeSample(t, work, "changing.bin", []byte("first version"), 0o644)
 
-	data, info, err := safefs.ReadFileNoFollow(p, maxEntrySize)
-	if err != nil {
-		t.Fatalf("read: %v", err)
-	}
+	source, info, data := readSourceForTest(t, p)
 	if err := os.WriteFile(p, []byte("a longer second version"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := removeOriginal(p, info, int64(len(data))); !errors.Is(err, ErrPathChanged) {
+	if err := removeOriginal(source, info, int64(len(data)), sha256.Sum256(data)); !errors.Is(err, ErrPathChanged) {
 		t.Fatalf("removeOriginal after a rewrite: err = %v, want ErrPathChanged", err)
 	}
 	if b, _ := os.ReadFile(p); string(b) != "a longer second version" {
@@ -75,7 +91,7 @@ func TestRemoveOriginalRefusesARewrittenFile(t *testing.T) {
 	if err := os.Rename(other, p); err != nil {
 		t.Fatal(err)
 	}
-	if err := removeOriginal(p, info, int64(len(data))); !errors.Is(err, ErrPathChanged) {
+	if err := removeOriginal(source, info, int64(len(data)), sha256.Sum256(data)); !errors.Is(err, ErrPathChanged) {
 		t.Fatalf("removeOriginal after a replacement: err = %v, want ErrPathChanged", err)
 	}
 	if _, err := os.Lstat(p); err != nil {
@@ -88,11 +104,8 @@ func TestRemoveOriginalUnlinksAnUnchangedFile(t *testing.T) {
 	work := t.TempDir()
 	p := writeSample(t, work, "quiet.bin", []byte("nothing changed"), 0o644)
 
-	data, info, err := safefs.ReadFileNoFollow(p, maxEntrySize)
-	if err != nil {
-		t.Fatalf("read: %v", err)
-	}
-	if err := removeOriginal(p, info, int64(len(data))); err != nil {
+	source, info, data := readSourceForTest(t, p)
+	if err := removeOriginal(source, info, int64(len(data)), sha256.Sum256(data)); err != nil {
 		t.Fatalf("removeOriginal: %v", err)
 	}
 	if _, err := os.Lstat(p); !errors.Is(err, os.ErrNotExist) {
@@ -114,15 +127,15 @@ func TestQuarantineReportsASwappedPathInsteadOfRemovingIt(t *testing.T) {
 
 	real := removeOriginal
 	defer func() { removeOriginal = real }()
-	removeOriginal = func(abs string, info os.FileInfo, size int64) error {
+	removeOriginal = func(source *quarantineSource, info os.FileInfo, size int64, digest [sha256.Size]byte) error {
 		// The attacker's window, reached from inside the call under test.
-		if err := os.Remove(abs); err != nil {
+		if err := os.Remove(source.path); err != nil {
 			t.Fatal(err)
 		}
-		if err := os.Symlink(precious, abs); err != nil {
+		if err := os.Symlink(precious, source.path); err != nil {
 			t.Fatal(err)
 		}
-		return real(abs, info, size)
+		return real(source, info, size, digest)
 	}
 
 	e, err := s.Quarantine(suspect, "incident test: dropped by masquerade", false)

@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"runtime"
 	"strings"
 	"syscall"
 	"time"
@@ -19,7 +20,9 @@ import (
 func psUsage(w io.Writer) {
 	fmt.Fprint(w, `Usage: cau ps [flags]
 
-Point-in-time threat scan of the live process table, read entirely from /proc.
+Point-in-time threat scan of the live process table. macOS and Windows scan
+the command lines visible to the caller. Linux reads /proc for additional
+evidence:
 Read-only: it never injects, ptraces, signals, or stops a process. It flags
 processes a benign system would not be running:
 
@@ -40,8 +43,8 @@ score of at least --respond-score. Everything else is reported and left running
 for a human. PID 1, the responder and its ancestors are never touched.
 
   stop  SIGSTOP: the process freezes with its memory and sockets intact for
-        forensics. Undo a wrong call with 'kill -CONT <pid>'.
-  kill  SIGKILL: not reversible.
+        forensics on Linux. Resume it with 'kill -CONT <pid>'.
+  kill  terminate a confirmed process. macOS requires task control access.
 
 Without root most other users' processes are only partly readable; those fields
 are skipped rather than failing the scan. Run with sudo for full visibility.
@@ -61,7 +64,8 @@ Flags:
   --feed <path>      abuse-intel feed to match process command lines against
   --proc-root <dir>  override /proc (testing)
 
-Exit codes: 0 nothing flagged, 1 one or more processes flagged, 4 usage.
+Exit codes: 0 nothing flagged, 1 one or more processes flagged, 2 unavailable
+or incomplete collection, 4 usage.
 `)
 }
 
@@ -99,11 +103,17 @@ func cmdPs(args []string, stdout, stderr io.Writer) int {
 	if *blockExe && action == "" {
 		return fail(stderr, report.ExitUsage, "--block-exe needs --respond")
 	}
+	native := runtime.GOOS != "linux" && (*procRoot == "" || *procRoot == "/proc")
+	if native && (*kernelEvents != "" || *blockExe || (action != "" && ((runtime.GOOS != "windows" && runtime.GOOS != "darwin") || action != procscan.ActionKill))) {
+		return fail(stderr, report.ExitUsage, "desktop process response supports --respond kill; stop, kernel events and executable blocking require Linux")
+	}
 
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM) // audit:ok standalone CLI context cancelled by signals
+	defer stop()
 	feed := loadFeedQuiet(*feedPath)
 	code := report.ExitOK
 	cycle := func() {
-		opts := procscan.Options{Threshold: *threshold, ProcRoot: *procRoot, Intel: feed}
+		opts := procscan.Options{Threshold: *threshold, ProcRoot: *procRoot, Intel: feed, Context: ctx}
 		if *kernelEvents != "" {
 			events, err := procscan.LoadKernelEvents(*kernelEvents)
 			if err != nil {
@@ -121,7 +131,7 @@ func cmdPs(args []string, stdout, stderr io.Writer) int {
 			responses = procscan.Respond(res, ro)
 		}
 		// A watch prints only what it found; a one-shot always reports.
-		if *interval > 0 && len(res.Flagged) == 0 {
+		if *interval > 0 && len(res.Flagged) == 0 && (!native || len(res.Warnings) == 0) {
 			return
 		}
 		if c := writePsReport(stdout, stderr, *format, res, responses); c != report.ExitOK {
@@ -132,13 +142,8 @@ func cmdPs(args []string, stdout, stderr io.Writer) int {
 		cycle()
 		return code
 	}
-	sig := make(chan os.Signal, 1)
-	signal.Notify(sig, os.Interrupt, syscall.SIGTERM)
-	defer signal.Stop(sig)
-	stop := make(chan struct{})
-	go func() { <-sig; close(stop) }()
 	status := func(f string, a ...interface{}) { fmt.Fprintf(stderr, f+"\n", a...) }
-	scanLoop(*interval, func() { runCycle(cycle, status) }, stop)
+	scanLoop(*interval, func() { runCycle(cycle, status) }, ctx.Done())
 	return report.ExitOK
 }
 
@@ -154,6 +159,9 @@ func writePsReport(stdout, stderr io.Writer, format string, res *procscan.Result
 			return fail(stderr, report.ExitRunFailed, "%v", err)
 		}
 	} else {
+		if res.Source != "" {
+			fmt.Fprintf(stdout, "Provider          : %s (%s)\n", res.Source, res.Coverage)
+		}
 		fmt.Fprintf(stdout, "Processes scanned : %d\n", res.Scanned)
 		if res.Unreadable > 0 {
 			fmt.Fprintf(stdout, "Unreadable        : %d (run as root for full visibility)\n", res.Unreadable)
@@ -188,9 +196,9 @@ func writePsReport(stdout, stderr io.Writer, format string, res *procscan.Result
 				fmt.Fprintf(stdout, "       %s\n", truncStr(report.TermSafe(detail), 200))
 			}
 		}
-		if len(res.Flagged) == 0 {
+		if len(res.Flagged) == 0 && (res.Coverage == "" || res.Coverage == "command-line") {
 			fmt.Fprintln(stdout, "\n No suspicious processes found.")
-		} else {
+		} else if len(res.Flagged) > 0 {
 			fmt.Fprintln(stdout, "\n *** SUSPICIOUS PROCESSES FOUND — INVESTIGATE BEFORE TRUSTING THIS HOST ***")
 		}
 		for _, r := range responses {
@@ -200,6 +208,9 @@ func writePsReport(stdout, stderr io.Writer, format string, res *procscan.Result
 
 	if len(res.Flagged) > 0 {
 		return report.ExitThreat
+	}
+	if res.Coverage == "unavailable" || res.Coverage == "unsupported" || res.Coverage == "partial" {
+		return report.ExitScanFailed
 	}
 	return report.ExitOK
 }

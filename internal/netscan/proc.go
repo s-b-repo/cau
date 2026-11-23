@@ -4,6 +4,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"io"
+	"iter"
 	"net"
 	"os"
 	"path/filepath"
@@ -77,7 +78,35 @@ type Socket struct {
 	// attributed to the lowest PID, which is the one still there after a
 	// worker exits; without this the co-owners are invisible, and the socket
 	// is reported against one process when several of them hold it.
-	SharedWith []int `json:"shared_with,omitempty"`
+	SharedWith      []int `json:"shared_with,omitempty"`
+	otherOwners     []socketOwner
+	ownersTruncated bool
+	sharedOwner     bool
+}
+
+type socketOwner struct {
+	pid                int
+	comm, exe, exeKind string
+}
+
+// socketsByHolder gives process-specific analytics the view of each holder.
+// Inventory counters still count the kernel socket once.
+func socketsByHolder(socks []Socket) iter.Seq[Socket] {
+	return func(yield func(Socket) bool) {
+		for _, s := range socks {
+			if !yield(s) {
+				return
+			}
+			for _, owner := range s.otherOwners {
+				view := s
+				view.PID, view.Comm, view.Exe, view.ExeKind = owner.pid, owner.comm, owner.exe, owner.exeKind
+				view.sharedOwner = true
+				if !yield(view) {
+					return
+				}
+			}
+		}
+	}
 }
 
 // listening reports whether the socket is waiting for peers. A UDP socket is
@@ -251,9 +280,12 @@ func attribute(s *Socket, holders map[string][]*proc) {
 			s.PID, s.Comm, s.Exe, s.ExeKind = p.pid, p.comm, p.exe, p.exeKind
 			continue
 		}
-		if len(s.SharedWith) < maxSharedHolders {
-			s.SharedWith = append(s.SharedWith, p.pid)
+		if len(s.SharedWith) >= maxSharedHolders {
+			s.ownersTruncated = true
+			break
 		}
+		s.SharedWith = append(s.SharedWith, p.pid)
+		s.otherOwners = append(s.otherOwners, socketOwner{p.pid, p.comm, p.exe, p.exeKind})
 	}
 }
 

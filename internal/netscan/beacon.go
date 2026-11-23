@@ -93,7 +93,7 @@ func (h *History) observe(socks []Socket, now time.Time) []Finding {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	h.samples++
-	for _, s := range socks {
+	for s := range socketsByHolder(socks) {
 		if isCapture(s.Proto) || s.Remote.Port == 0 || s.Local.Port == 0 {
 			continue
 		}

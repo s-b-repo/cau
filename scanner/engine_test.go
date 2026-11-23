@@ -78,6 +78,24 @@ func TestEngineLargeFileIsStreamed(t *testing.T) {
 	}
 }
 
+func TestEngineScansVirtualFilePastInMemoryLimit(t *testing.T) {
+	const path = "/proc/version"
+	if st, err := os.Stat(path); err != nil || st.Size() != 0 {
+		t.Skip("requires a zero-size Linux procfs file")
+	}
+	const rule = `rule virtual_file { strings: $header = "Linux version" condition: $header at 0 }`
+	ys, _, err := LoadYaraRuleFiles([]RuleSource{{Text: rule}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ys.Close()
+	res, _ := (&Engine{Yara: ys, MaxInMemory: 4}).ScanFile(path)
+	if res.Error != nil || res.Verdict != VerdictMalicious || res.Size <= 4 {
+		t.Fatalf("virtual file scan returned %+v", res)
+	}
+	findMatch(t, res.YaraMatches, "virtual_file")
+}
+
 func TestEngineScanDirectoryIsDeterministicAndConcurrent(t *testing.T) {
 	root := t.TempDir()
 	var want []string
@@ -340,10 +358,7 @@ func TestIncompleteYaraPassIsNotACleanVerdict(t *testing.T) {
 	}
 }
 
-// Above the in-memory limit the digests come from one open of the path and
-// YARA's matches from a later one. A file replaced in between must be reported
-// as an incomplete scan, never as coherent evidence about one version.
-func TestFileReplacedBetweenHashAndYaraIsFlagged(t *testing.T) {
+func TestStreamedScanRejectsEvidenceWhenSourceChanges(t *testing.T) {
 	const needle = "CAU_SWAP_NEEDLE"
 	ys, _, err := LoadYaraRuleFiles([]RuleSource{{
 		Text: "rule swap_probe { strings: $n = \"" + needle + "\" condition: $n }",
@@ -354,6 +369,7 @@ func TestFileReplacedBetweenHashAndYaraIsFlagged(t *testing.T) {
 	defer ys.Close()
 
 	original := bytes.Repeat([]byte{0x20}, 8192)
+	copy(original[5000:], needle)
 	want := hashBytes(original)
 	path := writeTempFile(t, "streamed.bin", original)
 
@@ -363,28 +379,26 @@ func TestFileReplacedBetweenHashAndYaraIsFlagged(t *testing.T) {
 		if name != "yara" || swapped {
 			return
 		}
-		// The write happens on the detector goroutine, so the error is only
-		// visible here; a temp-directory write is not the thing under test.
 		swapped = true
-		_ = os.WriteFile(path, append(bytes.Repeat([]byte{0x20}, 4096), needle...), 0o644)
+		if err := os.WriteFile(path, []byte("rewritten file"), 0o644); err != nil {
+			t.Error(err)
+		}
 	}
 	res, _ := e.ScanFile(path)
 	if !swapped {
 		t.Fatal("the swap never happened, so this proves nothing")
 	}
 
-	// The digests kept their version, which is exactly the mixing to prevent.
 	if res.SHA256 != want.sha256 || res.MD5 != want.md5 {
 		t.Errorf("hashes drifted from the version that was read first")
 	}
-	if res.Verdict != VerdictError || res.Error == nil {
-		t.Fatalf("verdict %v, err %v: hashes and matches may describe different versions", res.Verdict, res.Error)
+	if res.Verdict != VerdictError || res.Error == nil || res.Fusion != nil {
+		t.Fatalf("changed source produced verdict %v, error %v, fusion %+v", res.Verdict, res.Error, res.Fusion)
 	}
 	if !strings.Contains(strings.Join(res.Warnings, "\n"), "changed while it was scanned") {
 		t.Fatalf("the report has to say what happened: %v", res.Warnings)
 	}
-	// YARA read the second version, so its matches are kept rather than dropped.
-	if got := ruleNames(res.YaraMatches); len(got) != 1 || got[0] != "swap_probe" {
-		t.Fatalf("YARA matches = %v, want swap_probe (the match must not be dropped)", got)
+	if len(res.YaraMatches) != 0 {
+		t.Fatalf("unstable file returned YARA evidence: %v", ruleNames(res.YaraMatches))
 	}
 }

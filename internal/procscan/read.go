@@ -114,18 +114,15 @@ func readSmall(path string, max int) string {
 	return b
 }
 
-// readSmall2 is readSmall plus whether the byte limit was reached. A /proc file
-// longer than max is cut there, so exactly max bytes read means the rest is
-// still unread: argv past the command-line cap, an LD_PRELOAD past the
-// environment cap, or a mapping past the maps cap are all in that rest.
+// readSmall2 reports whether a /proc file extended past the byte limit.
 func readSmall2(path string, max int) (string, bool) {
 	f, err := os.Open(path)
 	if err != nil {
 		return "", false
 	}
 	defer f.Close()
-	b, _ := io.ReadAll(io.LimitReader(f, int64(max)))
-	return string(b), len(b) == max
+	b, _ := io.ReadAll(io.LimitReader(f, int64(max)+1)) // audit:ok a process can exit mid-read; keep any bytes already read
+	return string(b[:min(len(b), max)]), len(b) > max
 }
 
 // truncated records one field of one process that was cut at a cap, so the

@@ -89,16 +89,19 @@ func (w *Watcher) markIncomplete() {
 
 // addTree watches root and everything below it. A directory created under a
 // watch can be filled before the watch on it exists, so found, when set,
-// receives the files already inside. full, when set, hears that the limit stopped
-// the walk: what is under the rest of the tree has been seen by nothing.
-func (w *Watcher) addTree(root string, found func(string), full func()) {
-	stopped := false
+// receives the files already inside. incomplete is called if the walk misses
+// part of the tree or fails to install a watch.
+func (w *Watcher) addTree(root string, found func(string), incomplete func()) {
+	gap := false
 	defer func() {
-		if stopped && full != nil {
-			full()
+		if gap && incomplete != nil {
+			incomplete()
 		}
 	}()
-	walked := safefs.WalkRoot(root)
+	walked := root
+	if found == nil {
+		walked = safefs.WalkRoot(root)
+	}
 	// The callback below reports every per-path failure. An error returned by
 	// the walk itself means it stopped before the tree was exhausted, so
 	// whatever is left was watched by nothing: the coverage gap is recorded
@@ -110,6 +113,7 @@ func (w *Watcher) addTree(root string, found func(string), full func()) {
 			// directory that went away mid-walk — is a coverage gap, and the
 			// files under it would never be reported without it.
 			if !(p == walked && errors.Is(err, fs.ErrNotExist)) {
+				gap = true
 				w.markIncomplete()
 			}
 			return nil
@@ -126,20 +130,21 @@ func (w *Watcher) addTree(root string, found func(string), full func()) {
 		w.mu.Lock()
 		defer w.mu.Unlock()
 		if len(w.dirs) >= w.maxDirs {
-			w.truncated, stopped = true, true
+			w.truncated, gap = true, true
 			return filepath.SkipAll
 		}
 		wd, err := syscall.InotifyAddWatch(int(w.f.Fd()), p, mask)
 		if err != nil {
 			// ENOSPC is the per-user watch limit and it lands here rather than
 			// at the count above: this subtree is unwatched, and silently so.
-			w.truncated = true
+			w.truncated, gap = true, true
 			return nil
 		}
 		w.dirs[int32(wd)] = p
 		return nil
 	})
 	if err != nil {
+		gap = true
 		w.markIncomplete()
 	}
 }

@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -45,13 +46,58 @@ import (
 	"github.com/s-b-repo/cau/scanner/static"
 )
 
-// defaultWatchRoots are where attacks land and where they make themselves stay.
-// A root that does not exist is skipped, so one list works across hosts.
+// defaultWatchRoots lists Linux drop zones and startup directories.
 var defaultWatchRoots = []string{
 	"/tmp", "/var/tmp", "/dev/shm", "/var/www", "/srv",
 	"/etc/cron.d", "/etc/cron.hourly", "/etc/cron.daily", "/etc/cron.weekly", "/etc/cron.monthly",
 	"/var/spool/cron", "/etc/systemd/system", "/etc/profile.d", "/etc/udev/rules.d",
 	"/etc/update-motd.d", "/etc/apt/apt.conf.d", "/etc/sudoers.d", "/etc/pam.d", "/root/.ssh",
+}
+
+func defendWatchRoots(roots []string) []string {
+	if runtime.GOOS == "linux" {
+		if len(roots) == 0 {
+			return defaultWatchRoots
+		}
+		return roots
+	}
+	if len(roots) == 0 {
+		var home string
+		if directory, err := os.UserHomeDir(); err == nil {
+			home = directory
+		}
+		switch runtime.GOOS {
+		case "darwin":
+			roots = []string{"/private/tmp", "/private/var/tmp", "/Library/LaunchAgents", "/Library/LaunchDaemons"}
+			if home != "" {
+				roots = append(roots, filepath.Join(home, "Downloads"), filepath.Join(home, "Library", "LaunchAgents"))
+			}
+		case "windows":
+			roots = []string{os.TempDir()}
+			if home != "" {
+				roots = append(roots, filepath.Join(home, "Downloads"))
+			}
+			for _, variable := range []string{"APPDATA", "ProgramData"} {
+				if dir := os.Getenv(variable); filepath.IsAbs(dir) {
+					roots = append(roots, filepath.Join(dir, "Microsoft", "Windows", "Start Menu", "Programs", "Startup"))
+				}
+			}
+		default:
+			return defaultWatchRoots
+		}
+	}
+	// Keep sweeps and native notifications keyed by the same absolute path.
+	resolved := make([]string, 0, len(roots))
+	for _, path := range roots {
+		if absolute, err := filepath.Abs(path); err == nil {
+			path = absolute
+			if canonical, err := filepath.EvalSymlinks(path); err == nil {
+				path = canonical
+			}
+		}
+		resolved = append(resolved, path)
+	}
+	return resolved
 }
 
 // dropZones are where a change is a new file to read, not a change to what runs
@@ -141,7 +187,7 @@ const (
 	// them. What is over this is reported rather than read.
 	defendMaxScanSize = 1 << 30
 	// defendSweepEvery re-reads the watched trees. It is what finds a file nothing
-	// reported: no inotify at all, a directory past the watch limit, a lost event.
+	// reported: an unavailable provider, a directory past the watch limit, a lost event.
 	defendSweepEvery = 5 * time.Minute
 	// defendLargeVault is the size above which files enter the vault one at a time.
 	// A quarantine holds a file in memory twice over, so a burst of large ones
@@ -192,7 +238,7 @@ finding. No layer waits for another, so a slow one delays only itself.
                incident. Remote evidence corroborates and never directs: a
                response is only ever planned for this host's own artefacts
 
-New files are scanned as they land, through inotify on the places attacks arrive
+New files are scanned as they land, through native notifications for watched paths
 and persist. Flagged files are remembered, so a file dropped now joins the process
 that runs it an hour later.
 
@@ -333,8 +379,9 @@ type fileEntry struct {
 	stamp  fileStamp
 	signal correlate.Signal
 	hit    bool
-	// racy means the file changed too close to its scan for the stamp to rule
-	// out a later change with the same timestamp.
+	digest string
+	// racy means the scan was incomplete or the file changed too close to
+	// the scan for the stamp to rule out a later change.
 	racy bool
 }
 
@@ -358,7 +405,7 @@ const (
 // goroutines of its own to act on. Evidence is shared only through the fields mu
 // guards, so a slow layer delays its own news and nobody else's.
 //
-//	inotify ─► fileQueue ─► scan workers ──────┐
+//	file watch ─► fileQueue ─► scan workers ──┐
 //	timers, changes ─► process ────────────────┤
 //	                ─► persistence ────────────┼─► correlator ─► respond + emit
 //	                ─► canary ─────────────────┤    (per incident, at once)
@@ -382,6 +429,8 @@ type defender struct {
 	feedInterval time.Duration
 
 	process, persistence bool
+	snapshotContext      context.Context
+	desktopHost          bool
 	// network is the NDR layer: the socket tables, the resolver configuration
 	// and the neighbour table. netHistory is what gives it the analytics that
 	// need more than one sample (beaconing, gateway-MAC churn), which is a
@@ -519,15 +568,27 @@ func (d *defender) ready() *defender {
 }
 
 func (d *defender) enqueue(path string) {
-	if strings.HasPrefix(path, d.store+string(filepath.Separator)) {
+	if strings.HasPrefix(path, d.store+string(filepath.Separator)) || quarantine.IsStagingFile(path) {
 		return // the vault's own writes are not new files
 	}
 	if !d.queue.push(path) {
 		d.requestSweep()
 	}
-	if !isDropZone(path) {
+	if !d.desktopHost && !isDropZone(path) {
 		d.wakeHostLayers()
+	} else if d.desktopHost && startupWatchPath(path) {
+		d.wakePersistence.fire()
 	}
+}
+
+func startupWatchPath(path string) bool {
+	for _, part := range strings.Split(filepath.ToSlash(path), "/") {
+		if strings.EqualFold(part, "LaunchAgents") || strings.EqualFold(part, "LaunchDaemons") ||
+			strings.EqualFold(part, "Startup") {
+			return true
+		}
+	}
+	return false
 }
 
 // wakeHostLayers re-reads what a change could have altered. Each goes at its own
@@ -560,6 +621,9 @@ func (d *defender) sweepRoots() {
 		_ = filepath.WalkDir(safefs.WalkRoot(d.roots[i]), func(p string, e fs.DirEntry, err error) error {
 			if err != nil {
 				return nil
+			}
+			if e.IsDir() && quarantine.IsStagingDir(p) {
+				return filepath.SkipDir
 			}
 			if e.Type().IsRegular() && !strings.HasPrefix(p, d.store+string(filepath.Separator)) && !d.queue.pushBacklog(p) {
 				return filepath.SkipAll
@@ -609,7 +673,7 @@ func (d *defender) scanFile(name, read string) {
 	}
 	racy := time.Since(changedAt(fi)) < defendRacyWindow
 	entry := d.verdict(name, read, stamp)
-	entry.racy = racy
+	entry.racy = entry.racy || racy
 	if read != name && ok && e.hit && !entry.hit {
 		// Two inodes can answer to one path: a flagged decoy started from a clean
 		// file there must not wipe the verdict on the implant still running, or the
@@ -623,11 +687,15 @@ func (d *defender) verdict(name, read string, stamp fileStamp) fileEntry {
 	d.slots <- struct{}{}
 	defer func() { <-d.slots }()
 	res, h := d.engine.ScanFile(read)
-	sig, hit := fileSignal(name, res, h)
-	if !hit {
-		sig = correlate.Signal{} // nothing reads it, and tens of thousands are kept
+	if res.Error != nil && d.warn != nil {
+		d.warn("[WARN] could not complete scan of %s: %s", report.TermSafe(name), report.TermSafe(res.Error.Error()))
 	}
-	return fileEntry{stamp: stamp, signal: sig, hit: hit}
+	sig, hit := fileSignal(name, res, h)
+	entry := fileEntry{stamp: stamp, signal: sig, hit: hit, digest: res.SHA256, racy: res.Error != nil}
+	if !hit {
+		entry.signal = correlate.Signal{}
+	}
+	return entry
 }
 
 // keepRunning drops verdicts on binaries no flagged process is running any more.
@@ -778,7 +846,11 @@ func (d *defender) processSignals(res *procscan.Result) []correlate.Signal {
 	for _, p := range res.Flagged {
 		if exe := trimDeleted(p.Exe); correlate.Linkable(exe) {
 			names = append(names, exe)
-			reads = append(reads, filepath.Join(d.procRoot, fmt.Sprint(p.PID), "exe"))
+			read := exe
+			if res.Source == "" {
+				read = filepath.Join(d.procRoot, fmt.Sprint(p.PID), "exe")
+			}
+			reads = append(reads, read)
 		}
 	}
 	d.keepRunning(viewProcess, names) // before the scans, or another layer's pass could drop what they record
@@ -864,11 +936,19 @@ func (d *defender) refusedPID(e procscan.KernelEvent) int {
 }
 
 func (d *defender) persistenceSignals() []correlate.Signal {
-	flagged := persist.Scan(persist.Options{Root: d.persistRoot}).Flagged()
+	result := persist.Scan(persist.Options{Root: d.persistRoot, Context: d.snapshotContext})
+	flagged := result.Flagged()
+	if result.Source != "" && len(result.Incomplete) > 0 && d.warn != nil {
+		d.warn("[WARN] persistence: %s had %d unreadable locations", result.Source, len(result.Incomplete))
+	}
 	refs := make([][]string, len(flagged))
 	var named []string
 	for i, f := range flagged {
-		refs[i] = correlate.ReferencedPaths(f.Evidence)
+		if result.Source == "" {
+			refs[i] = correlate.ReferencedPaths(f.Evidence)
+		} else if correlate.Linkable(f.Executable) {
+			refs[i] = []string{f.Executable}
+		}
 		named = append(named, refs[i]...)
 	}
 	d.scanAll(named, named)
@@ -889,7 +969,7 @@ func (d *defender) persistenceSignals() []correlate.Signal {
 func (d *defender) networkSignals() []correlate.Signal {
 	res := netscan.Scan(netscan.Options{
 		ProcRoot: d.procRoot, EtcRoot: d.etcRoot, Intel: d.feed.Load(), History: d.netHistory,
-		Watch: d.watchlist(),
+		Watch: d.watchlist(), Context: d.snapshotContext,
 	})
 	for _, w := range res.Warnings {
 		d.warn("[WARN] network: %s", report.TermSafe(w))
@@ -913,7 +993,7 @@ func (d *defender) networkSignals() []correlate.Signal {
 		}
 		seen[exe] = true
 		names = append(names, exe)
-		if f.PID > 0 {
+		if f.PID > 0 && res.Source == "" {
 			reads = append(reads, filepath.Join(d.procRoot, fmt.Sprint(f.PID), "exe"))
 		} else {
 			reads = append(reads, exe)
@@ -1148,12 +1228,12 @@ func (d *defender) processLayer() {
 			d.warn("[WARN] %s", report.TermSafe(err.Error()))
 		}
 	}
-	ps := procscan.Scan(procscan.Options{ProcRoot: d.procRoot, Intel: d.feed.Load(), KernelEvents: events})
+	ps := procscan.Scan(procscan.Options{ProcRoot: d.procRoot, Intel: d.feed.Load(), KernelEvents: events, Context: d.snapshotContext})
 	// A scan that stopped at a read cap saw part of a process and none of what
 	// was past the cap. The daemon says so every pass, because a quiet run that
 	// read half a command line is not a run that found nothing.
 	for _, w := range ps.Warnings {
-		if strings.HasPrefix(w, "partial scan:") {
+		if d.warn != nil && (ps.Source != "" || strings.HasPrefix(w, "partial scan:")) {
 			d.warn("[WARN] %s", report.TermSafe(w))
 		}
 	}
@@ -1690,14 +1770,16 @@ func (d *defender) respond(inc correlate.Incident, ps *procscan.Result) []string
 			}
 			steps = append(steps, func() []string {
 				var done []string
-				for _, r := range procscan.Respond(&procscan.Result{Flagged: []procscan.Process{p}}, ro) {
+				target := *ps
+				target.Flagged = []procscan.Process{p}
+				for _, r := range procscan.Respond(&target, ro) {
 					done = append(done, r.String())
 				}
 				return done
 			})
 		}
 	}
-	if d.action != "" {
+	if d.action != "" && !d.desktopHost {
 		// A process the process scan never flagged can still be the one worth
 		// stopping: the network sensor finds a memfd binary holding a
 		// command-and-control connection that scores below procscan's own
@@ -1802,9 +1884,9 @@ func (d *defender) quarantineFile(path string, inc correlate.Incident) string {
 	// for it. Only the file's own verdict can send it to the vault.
 	d.scanFile(path, path)
 	d.mu.Lock()
-	sig, flagged := d.hits[path]
+	entry := d.files[path]
 	d.mu.Unlock()
-	if !flagged || sig.Class == classTooLarge {
+	if !entry.hit || entry.digest == "" {
 		return "left " + path + " in place: the evidence was not about the file there now"
 	}
 	if fi.Size() > defendLargeVault {
@@ -1815,7 +1897,7 @@ func (d *defender) quarantineFile(path string, inc correlate.Incident) string {
 	if err != nil {
 		return "quarantine failed: " + err.Error()
 	}
-	if _, err := s.Quarantine(path, "incident "+inc.ID+": "+inc.Why, false); err != nil {
+	if _, err := s.QuarantineVerified(path, "incident "+inc.ID+": "+inc.Why, entry.digest); err != nil {
 		return "quarantine failed: " + err.Error()
 	}
 	d.forget(path)
@@ -2049,8 +2131,13 @@ func (d *defender) run(w *watch.Watcher, interval time.Duration, stop <-chan str
 	}
 	if w != nil {
 		go func() {
-			_ = w.Run(func(e watch.Event) {
+			var incomplete atomic.Bool
+			incomplete.Store(w.Truncated())
+			err := w.Run(func(e watch.Event) {
 				if e.Overflow {
+					if w.Truncated() && incomplete.CompareAndSwap(false, true) {
+						status("[WARN] a watched tree lost real-time coverage, relying on the %s file sweep for gaps", d.sweepEvery)
+					}
 					// Lost events can hide a change to what runs at boot as
 					// easily as a new file, and a sweep only finds files.
 					d.requestSweep()
@@ -2059,6 +2146,12 @@ func (d *defender) run(w *watch.Watcher, interval time.Duration, stop <-chan str
 					d.enqueue(e.Path)
 				}
 			})
+			if err != nil {
+				status("[WARN] real-time watch stopped: %s. File coverage falls back to the %s sweep",
+					report.TermSafe(err.Error()), d.sweepEvery)
+				d.requestSweep()
+				d.wakeHostLayers()
+			}
 		}()
 	}
 
@@ -2096,6 +2189,23 @@ func (d *defender) run(w *watch.Watcher, interval time.Duration, stop <-chan str
 }
 
 func cmdDefend(args []string, stdout, stderr io.Writer) int {
+	stop := make(chan struct{})
+	sig := make(chan os.Signal, 1)
+	signal.Notify(sig, os.Interrupt, syscall.SIGTERM)
+	defer signal.Stop(sig)
+	finished := make(chan struct{})
+	defer close(finished)
+	go func() {
+		select {
+		case <-sig:
+			close(stop)
+		case <-finished:
+		}
+	}()
+	return runDefend(args, stdout, stderr, stop, nil)
+}
+
+func runDefend(args []string, stdout, stderr io.Writer, stop <-chan struct{}, ready func()) int {
 	fs := flag.NewFlagSet("defend", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	fs.Usage = func() { defendUsage(stderr) }
@@ -2158,6 +2268,13 @@ func cmdDefend(args []string, stdout, stderr io.Writer) int {
 	fs.Visit(func(f *flag.Flag) { given[f.Name] = true })
 
 	status := func(f string, a ...interface{}) { fmt.Fprintf(stderr, f+"\n", a...) }
+	desktopHost := (runtime.GOOS == "windows" || runtime.GOOS == "darwin") && *procRoot == "/proc"
+	if desktopHost {
+		status("[*] using native desktop process, startup and connection providers")
+		if !given["dpkg-info"] && !given["pacman-local"] {
+			*packageInterval = 0
+		}
+	}
 
 	cfg, cfgErr := trust.LoadConfig(*configPath)
 	var faults []startFault
@@ -2189,6 +2306,19 @@ func cmdDefend(args []string, stdout, stderr io.Writer) int {
 	action := procscan.Action(*respond)
 	if action != "" && action != procscan.ActionStop && action != procscan.ActionKill {
 		return fail(stderr, report.ExitUsage, "--respond must be stop, kill or none")
+	}
+	if desktopHost {
+		*blockExe = false
+		if action == procscan.ActionStop && (given["respond"] || cfg.Respond != "") {
+			return fail(stderr, report.ExitUsage, "desktop process response supports --respond kill")
+		}
+		if action == procscan.ActionStop {
+			action, *respond = "", ""
+		}
+		*netblockOn = *netblockOn && (given["netblock"] || cfg.Netblock != nil)
+		if *once && *netblockOn && !*netblockDry {
+			return fail(stderr, report.ExitUsage, "desktop network response requires a running defend service or interval scan")
+		}
 	}
 	if *interval <= 0 {
 		return fail(stderr, report.ExitUsage, "--interval must be positive")
@@ -2234,10 +2364,7 @@ func cmdDefend(args []string, stdout, stderr io.Writer) int {
 		}
 	}()
 
-	roots := []string(watchDirs)
-	if len(roots) == 0 {
-		roots = defaultWatchRoots
-	}
+	roots := defendWatchRoots(watchDirs)
 	canaryPath := *canaryManifest
 	if canaryPath == "" {
 		canaryPath = discoverCanaryManifest(status)
@@ -2265,11 +2392,21 @@ func cmdDefend(args []string, stdout, stderr io.Writer) int {
 	// difference between "signature verified" and "nobody checked" is said out
 	// loud, as tamper, below; see startFault for why it does not stop here.
 	selftestPub, keyErr := defendPubkey(*selftestPubKeyFile)
+	snapshotContext, cancelSnapshots := context.WithCancel(context.Background()) // audit:ok daemon context cancelled by its shutdown channel
+	defer cancelSnapshots()
+	go func() {
+		select {
+		case <-stop:
+			cancelSnapshots()
+		case <-snapshotContext.Done():
+		}
+	}()
 	d := &defender{
 		engine: engine, procRoot: *procRoot, persistRoot: *persistRoot, hostRoot: *hostRoot,
 		provenance: provenance.New(*hostRoot),
 		feedPath:   resolvedFeed, feedInterval: *feedInterval,
-		process: !*noProcess, persistence: !*noPersistence, kernelEvents: kernelPath, canaryManifest: canaryPath,
+		process: !*noProcess, persistence: !*noPersistence, snapshotContext: snapshotContext, desktopHost: desktopHost,
+		kernelEvents: kernelPath, canaryManifest: canaryPath,
 		packageInterval:  *packageInterval,
 		selftestManifest: stManifest, selftestInterval: *selftestInterval, selftestPubKey: selftestPub,
 		selftestKeyFile: *selftestPubKeyFile, selftestKeyErr: keyErr,
@@ -2297,6 +2434,11 @@ func cmdDefend(args []string, stdout, stderr io.Writer) int {
 			status("[WARN] --netblock: %v", err)
 		} else {
 			d.blocker = b
+			defer func() {
+				if err := b.Close(); err != nil {
+					status("[WARN] network: %s", report.TermSafe(err.Error()))
+				}
+			}()
 			status("[*] network blocking armed: %s, blocks last %s, never touching %s",
 				b.Backend(), blockDuration(b), strings.Join(b.Protected(), " "))
 		}
@@ -2402,23 +2544,21 @@ func cmdDefend(args []string, stdout, stderr io.Writer) int {
 	status("[*] %s", harden.Apply().Summary())
 	var w *watch.Watcher
 	if !*noWatch {
+		d.sweepDue.Store(true)
 		if w, err = watch.New(roots, 0); err != nil {
-			status("[WARN] real-time watching unavailable, relying on the %s interval: %v", *interval, err)
+			status("[WARN] real-time watching unavailable, relying on the %s file sweep: %s", d.sweepEvery, report.TermSafe(err.Error()))
 			w = nil
 		} else {
 			defer w.Close()
-			status("[*] watching %d directories", w.Dirs())
-			if w.Truncated() {
-				status("[WARN] real-time coverage is incomplete: the directory limit was reached, or a directory could not be read or watched, so the %s interval is what covers those gaps", *interval)
+			status("[*] watching %d directory subscriptions", w.Dirs())
+			if w.Dirs() == 0 {
+				status("[WARN] no directories are attached to the real-time watcher")
 			}
-			d.sweepDue.Store(true)
+			if w.Truncated() {
+				status("[WARN] real-time coverage is incomplete: the directory limit was reached, or a directory could not be read or watched, so the %s file sweep covers those gaps", d.sweepEvery)
+			}
 		}
 	}
-	sig := make(chan os.Signal, 1)
-	signal.Notify(sig, os.Interrupt, syscall.SIGTERM)
-	defer signal.Stop(sig)
-	stop := make(chan struct{})
-	go func() { <-sig; close(stop) }()
 	startWatchdog(stop, status)
 	if sdnotify.Enabled() {
 		_ = sdnotify.Ready()
@@ -2455,6 +2595,9 @@ func cmdDefend(args []string, stdout, stderr io.Writer) int {
 		stance, d.workers, *interval)
 	status("[*] response: respond=%q quarantine=%v block-exe=%v netblock=%v | integrity=%s | selftest=%s feed-reload=%s forward=%s",
 		*respond, *quarantineFlag, *blockExe, d.blocker != nil, integrityState(d.guard), selftestState, feedState, forwardState)
+	if ready != nil {
+		ready()
+	}
 	d.run(w, *interval, stop, status)
 	engineInUse.Store(d.abandoned.Load())
 	if sdnotify.Enabled() {

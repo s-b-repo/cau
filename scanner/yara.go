@@ -510,7 +510,13 @@ func (ys *YaraScanner) scanFileInPlace(path string) ([]YaraMatch, error) {
 		return nil, fmt.Errorf("could not open %s for YARA scanning: %w", path, err)
 	}
 	defer f.Close()
+	return ys.scanDescriptor(f, path)
+}
 
+func (ys *YaraScanner) scanDescriptor(f *os.File, path string) ([]YaraMatch, error) {
+	if err := ys.usable(); err != nil {
+		return nil, err
+	}
 	var collected yara.MatchRules
 
 	sc, err := ys.newScanScanner(&collected)

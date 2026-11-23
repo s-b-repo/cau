@@ -19,6 +19,7 @@ import (
 	"net"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"sort"
 	"strings"
 
@@ -110,7 +111,19 @@ var systemPrefixes = []string{"/usr/", "/bin/", "/sbin/", "/lib/", "/lib64/", "/
 // Linkable reports whether a path identifies an artefact worth joining on, and
 // worth acting on.
 func Linkable(path string) bool {
+	if runtime.GOOS == "windows" && filepath.IsAbs(path) {
+		clean := strings.ToLower(filepath.ToSlash(filepath.Clean(path)))
+		volume := filepath.ToSlash(filepath.VolumeName(clean))
+		if len(volume) != 2 || volume[1] != ':' || len(clean) < 4 || strings.Contains(clean[2:], ":") {
+			return false
+		}
+		first, _, _ := strings.Cut(clean[3:], "/")
+		return first != "windows" && first != "program files" && first != "program files (x86)" && first != "programdata"
+	}
 	if !strings.HasPrefix(path, "/") {
+		return false
+	}
+	if runtime.GOOS == "darwin" && strings.HasPrefix(filepath.Clean(path)+"/", "/System/") {
 		return false
 	}
 	for _, p := range systemPrefixes {
@@ -365,6 +378,13 @@ func Quarantinable(path string) bool {
 		return false
 	}
 	clean := filepath.Clean(path)
+	if runtime.GOOS == "darwin" {
+		for _, part := range strings.Split(clean, "/") {
+			if strings.EqualFold(part, "LaunchAgents") || strings.EqualFold(part, "LaunchDaemons") {
+				return false
+			}
+		}
+	}
 	if clean == "/etc" || strings.HasPrefix(clean, "/etc/") {
 		return false
 	}

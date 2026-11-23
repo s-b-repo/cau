@@ -159,12 +159,16 @@ func TestFailedAddWatchLeavesCoverageIncomplete(t *testing.T) {
 	defer w.Close()
 	_ = w.f.Close() // every InotifyAddWatch below must now fail
 
-	w.addTree(root, nil, nil)
+	fallbacks := 0
+	w.addTree(root, func(string) {}, func() { fallbacks++ })
 	if w.Dirs() != 0 {
 		t.Fatalf("watched %d dirs, want none (every add failed)", w.Dirs())
 	}
 	if !w.Truncated() {
 		t.Fatal("a watch that could not be placed must leave the watcher marked incomplete")
+	}
+	if fallbacks != 1 {
+		t.Fatalf("watch installation failures requested %d fallback sweeps, want one", fallbacks)
 	}
 }
 

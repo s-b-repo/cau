@@ -8,6 +8,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 )
 
@@ -26,6 +27,10 @@ func TestQuarantineMovesAndNeutralizes(t *testing.T) {
 	// A fake PE header so we can assert the vault does not keep it runnable.
 	content := append([]byte("MZ\x90\x00"), bytes.Repeat([]byte("payload"), 100)...)
 	src := writeSample(t, work, "evil.exe", content, 0o755)
+	before, err := os.Stat(src)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	s, err := Open(filepath.Join(work, "vault"))
 	if err != nil {
@@ -44,8 +49,8 @@ func TestQuarantineMovesAndNeutralizes(t *testing.T) {
 	if e.Size != int64(len(content)) {
 		t.Errorf("size = %d, want %d", e.Size, len(content))
 	}
-	if e.Mode != 0o755 {
-		t.Errorf("mode = %o, want 0755", e.Mode)
+	if e.Mode != before.Mode().Perm() {
+		t.Errorf("mode = %o, want %o", e.Mode, before.Mode().Perm())
 	}
 	want := sha256.Sum256(content)
 	if e.SHA256 != hex.EncodeToString(want[:]) {
@@ -82,6 +87,10 @@ func TestRestoreRoundTrip(t *testing.T) {
 	work := t.TempDir()
 	content := bytes.Repeat([]byte{0x00, 0xff, 0x41, 0x7f}, 64)
 	src := writeSample(t, work, "data.dat", content, 0o640)
+	before, err := os.Stat(src)
+	if err != nil {
+		t.Fatal(err)
+	}
 	s, _ := Open(filepath.Join(work, "vault"))
 	e, err := s.Quarantine(src, "test", false)
 	if err != nil {
@@ -104,8 +113,8 @@ func TestRestoreRoundTrip(t *testing.T) {
 		t.Error("restored bytes differ from original")
 	}
 	info, _ := os.Stat(dest)
-	if info.Mode().Perm() != 0o640 {
-		t.Errorf("restored mode = %o, want 0640", info.Mode().Perm())
+	if info.Mode().Perm() != before.Mode().Perm() {
+		t.Errorf("restored mode = %o, want %o", info.Mode().Perm(), before.Mode().Perm())
 	}
 }
 
@@ -145,6 +154,46 @@ func TestRestoreRefusesExistingDest(t *testing.T) {
 	}
 	if b, _ := os.ReadFile(dest); string(b) != "xyz" {
 		t.Error("overwrite restore did not write original bytes")
+	}
+}
+
+func TestConcurrentRestoreKeepsTheFirstDestination(t *testing.T) {
+	dir := t.TempDir()
+	vault, err := Open(filepath.Join(dir, "vault"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err := vault.Quarantine(writeSample(t, dir, "first", []byte("first"), 0o600), "fixture", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := vault.Quarantine(writeSample(t, dir, "second", []byte("second"), 0o600), "fixture", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dest := filepath.Join(dir, "restored")
+	results := make(chan error, 2)
+	var group sync.WaitGroup
+	for _, entry := range []Entry{first, second} {
+		group.Add(1)
+		go func() {
+			defer group.Done()
+			_, err := vault.Restore(entry.ID, dest, false)
+			results <- err
+		}()
+	}
+	group.Wait()
+	close(results)
+	successes := 0
+	for err := range results {
+		if err == nil {
+			successes++
+		} else if !errors.Is(err, ErrExists) {
+			t.Fatal(err)
+		}
+	}
+	if successes != 1 {
+		t.Fatalf("published %d files at the same destination, want 1", successes)
 	}
 }
 
@@ -299,6 +348,20 @@ func TestOpenRejectsBadIndexVersion(t *testing.T) {
 	}
 	if _, err := Open(vault); err == nil {
 		t.Error("Open accepted an incompatible index version")
+	}
+}
+
+func TestOpenRejectsInvalidBlobID(t *testing.T) {
+	vault := filepath.Join(t.TempDir(), "vault")
+	s, err := Open(vault)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.writeIndex(&index{Entries: []Entry{{ID: "../outside"}}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Open(vault); !errors.Is(err, ErrIntegrity) {
+		t.Fatalf("Open with invalid blob ID returned %v, want ErrIntegrity", err)
 	}
 }
 

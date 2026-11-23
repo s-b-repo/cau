@@ -1,11 +1,13 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"io"
 	"os"
 	"os/signal"
+	"runtime"
 	"strings"
 	"syscall"
 	"time"
@@ -23,8 +25,9 @@ func netUsage(w io.Writer) {
        cau net clear [flags]
        cau net dns [flags]
 
-Point-in-time threat scan of the host's network plane, read entirely from /proc
-and /etc. Read-only: it opens no socket, sends no probe and captures no packets.
+Point-in-time threat scan of the host's network plane. macOS and Windows read
+visible TCP and UDP endpoints. Linux reads /proc and /etc for additional data.
+Read-only scanning sends no probe and captures no packets.
 Every socket the kernel holds is attributed to the process and the executable
 behind it, which is what makes a network finding something you can act on:
 
@@ -49,8 +52,9 @@ confirmed finding: one that asserts live state (a fileless process holding a
 socket) or an exact identification (a feed hit). A score alone is an alert for a
 human, because a handler port and an unusual listener are a developer's Tuesday.
 
-Blocking asks the kernel to drop traffic to and from an address, in cau's own
-nftables table (or its own iptables chains), and it expires: --block-ttl
+Blocking asks the kernel to drop traffic to and from an address. Linux uses
+nftables or iptables. Windows and macOS use temporary sessions in interval
+mode. Desktop sessions release their blocks when the process exits. --block-ttl
 defaults to 1h so a wrong block on a production host heals itself. These are
 never blocked, however confirmed the incident: loopback, this host's own
 addresses, its default gateways, its configured resolvers, link-local and
@@ -71,13 +75,14 @@ Flags:
   --sever             also destroy established connections to a blocked peer
                       (needs the ss tool and a kernel that supports it)
   --dry-run           print the firewall commands and run none of them
-  --backend <name>    force nftables or iptables instead of discovering one
+  --backend <name>    force nftables, iptables, wfp, or pf
   --ledger <path>     append every block to this file with its reason
   --reason <text>     with 'block': why this address is being blocked, for the
                       ledger, so 'cau net blocks' can say who asked and why
   --proc-root <dir>  --etc-root <dir>   override /proc and /etc (testing)
 
-Exit codes: 0 nothing flagged, 1 one or more findings, 3 run failed, 4 usage.
+Exit codes: 0 nothing flagged, 1 one or more findings, 2 unavailable or
+incomplete collection, 3 run failed, 4 usage.
 `)
 }
 
@@ -108,12 +113,21 @@ func (n *netFlags) bind(fs *flag.FlagSet) {
 	fs.DurationVar(&n.ttl, "block-ttl", netblock.DefaultTTL, "how long a block lasts; 0 means until it is removed")
 	fs.BoolVar(&n.sever, "sever", false, "also destroy established connections to a blocked peer")
 	fs.BoolVar(&n.dryRun, "dry-run", false, "print the firewall commands and run none of them")
-	fs.StringVar(&n.backend, "backend", "", "force a firewall backend: nftables or iptables")
+	fs.StringVar(&n.backend, "backend", "", "force a firewall backend: nftables, iptables, wfp, or pf")
 	fs.StringVar(&n.ledger, "ledger", "", "append every block to this file with its reason")
 }
 
 // blocker builds a Blocker with this host's never-block list.
 func (n *netFlags) blocker() (*netblock.Blocker, error) {
+	if runtime.GOOS != "linux" && runtime.GOOS != "windows" && runtime.GOOS != "darwin" && !n.dryRun {
+		return nil, fmt.Errorf("live network response requires Linux, Windows or macOS")
+	}
+	if runtime.GOOS == "windows" && n.backend != "" && n.backend != string(netblock.BackendWFP) && !n.dryRun {
+		return nil, fmt.Errorf("live Windows network response requires the wfp backend")
+	}
+	if runtime.GOOS == "darwin" && n.backend != "" && n.backend != string(netblock.BackendPF) && !n.dryRun {
+		return nil, fmt.Errorf("live macOS network response requires the pf backend")
+	}
 	ttl := n.ttl
 	if ttl == 0 {
 		ttl = -1 // the flag's 0 means "no expiry"; the package's 0 means "default"
@@ -130,6 +144,11 @@ func (n *netFlags) blocker() (*netblock.Blocker, error) {
 		Ledger:  ledger,
 		Sever:   n.sever,
 	})
+}
+
+func (n *netFlags) sessionFirewall() bool {
+	return runtime.GOOS == "windows" || runtime.GOOS == "darwin" ||
+		n.backend == string(netblock.BackendWFP) || n.backend == string(netblock.BackendPF)
 }
 
 func cmdNet(args []string, stdout, stderr io.Writer) int {
@@ -171,11 +190,19 @@ func cmdNet(args []string, stdout, stderr io.Writer) int {
 
 	var blocker *netblock.Blocker
 	if nf.respond == "block" {
+		if nf.sessionFirewall() && !nf.dryRun && nf.interval <= 0 {
+			return fail(stderr, report.ExitUsage, "desktop network response requires --interval to keep its filtering session open")
+		}
 		b, err := nf.blocker()
 		if err != nil {
 			return fail(stderr, report.ExitRunFailed, "%v", err)
 		}
 		blocker = b
+		defer func() {
+			if err := b.Close(); err != nil {
+				fmt.Fprintf(stderr, "[WARN] network: %s\n", report.TermSafe(err.Error()))
+			}
+		}()
 	}
 
 	feed := loadFeedQuiet(nf.feed)
@@ -183,17 +210,19 @@ func cmdNet(args []string, stdout, stderr io.Writer) int {
 	// analytics compare samples, so they say nothing on a single pass and more
 	// with each one. A --interval run is what makes them useful.
 	history := netscan.NewHistory()
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM) // audit:ok standalone CLI context cancelled by signals
+	defer stop()
 	code := report.ExitOK
 	cycle := func() {
 		res := netscan.Scan(netscan.Options{
 			Threshold: nf.threshold, ProcRoot: nf.procRoot, EtcRoot: nf.etcRoot,
-			Intel: feed, History: history,
+			Intel: feed, History: history, Context: ctx,
 		})
 		var actions []string
 		if blocker != nil {
 			actions = respondNetwork(blocker, res)
 		}
-		if nf.interval > 0 && len(res.Flagged) == 0 {
+		if nf.interval > 0 && len(res.Flagged) == 0 && len(actions) == 0 && (res.Source == "" || len(res.Warnings) == 0) {
 			return // a watch prints only what it found
 		}
 		if c := writeNetReport(stdout, stderr, nf.format, res, actions, blocker); c != report.ExitOK {
@@ -204,13 +233,8 @@ func cmdNet(args []string, stdout, stderr io.Writer) int {
 		cycle()
 		return code
 	}
-	sig := make(chan os.Signal, 1)
-	signal.Notify(sig, os.Interrupt, syscall.SIGTERM)
-	defer signal.Stop(sig)
-	stop := make(chan struct{})
-	go func() { <-sig; close(stop) }()
 	status := func(f string, a ...interface{}) { fmt.Fprintf(stderr, f+"\n", a...) }
-	scanLoop(nf.interval, func() { runCycle(cycle, status) }, stop)
+	scanLoop(nf.interval, func() { runCycle(cycle, status) }, ctx.Done())
 	return report.ExitOK
 }
 
@@ -231,7 +255,9 @@ func respondNetwork(b *netblock.Blocker, res *netscan.Result) []string {
 		}
 		out = append(out, what)
 	}
-	if n, err := b.Expire(); err == nil && n > 0 {
+	if n, err := b.Expire(); err != nil {
+		out = append(out, "could not verify firewall expiry: "+err.Error())
+	} else if n > 0 {
 		out = append(out, fmt.Sprintf("released %d expired block(s)", n))
 	}
 	return out
@@ -254,6 +280,9 @@ func writeNetReport(stdout, stderr io.Writer, format string, res *netscan.Result
 			return fail(stderr, report.ExitRunFailed, "%v", err)
 		}
 	} else {
+		if res.Source != "" {
+			fmt.Fprintf(stdout, "Provider          : %s (%s)\n", res.Source, res.Coverage)
+		}
 		fmt.Fprintf(stdout, "Sockets read      : %d (%d attributed to a process)\n", res.Sockets, res.Attributed)
 		fmt.Fprintf(stdout, "Listening         : %d\n", res.Listeners)
 		fmt.Fprintf(stdout, "Established       : %d\n", res.Established)
@@ -291,9 +320,9 @@ func writeNetReport(stdout, stderr io.Writer, format string, res *netscan.Result
 				fmt.Fprintln(stdout, line)
 			}
 		}
-		if len(res.Flagged) == 0 {
+		if len(res.Flagged) == 0 && (res.Coverage == "" || res.Coverage == "visible-sockets") {
 			fmt.Fprintln(stdout, "\n Nothing suspicious on the network plane.")
-		} else {
+		} else if len(res.Flagged) > 0 {
 			fmt.Fprintln(stdout, "\n *** NETWORK FINDINGS — INVESTIGATE BEFORE TRUSTING THIS HOST ***")
 		}
 		for _, a := range actions {
@@ -302,6 +331,9 @@ func writeNetReport(stdout, stderr io.Writer, format string, res *netscan.Result
 	}
 	if len(res.Flagged) > 0 {
 		return report.ExitThreat
+	}
+	if res.Coverage == "unavailable" || res.Coverage == "unsupported" || res.Coverage == "partial" {
+		return report.ExitScanFailed
 	}
 	return report.ExitOK
 }
@@ -321,6 +353,9 @@ func cmdNetBlock(sub string, args []string, stdout, stderr io.Writer) int {
 	addrs := fs.Args()
 	if (sub == "block" || sub == "unblock") && len(addrs) == 0 {
 		return fail(stderr, report.ExitUsage, "'cau net %s' needs at least one address", sub)
+	}
+	if nf.sessionFirewall() && !nf.dryRun {
+		return fail(stderr, report.ExitUsage, "desktop filters belong to a running CAU session. Use net --respond block --interval or stop the owning agent to release them.")
 	}
 	b, err := nf.blocker()
 	if err != nil {

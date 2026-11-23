@@ -47,8 +47,10 @@
 package netscan
 
 import (
+	"context"
 	"fmt"
 	"net"
+	"runtime"
 	"sort"
 	"strconv"
 	"time"
@@ -115,6 +117,8 @@ type Result struct {
 	Threshold   int       `json:"threshold"`
 	Flagged     []Finding `json:"flagged,omitempty"`
 	Warnings    []string  `json:"warnings,omitempty"`
+	Source      string    `json:"source,omitempty"`
+	Coverage    string    `json:"coverage,omitempty"`
 }
 
 // Options configure a scan. The zero value scans the running host.
@@ -142,7 +146,8 @@ type Options struct {
 	// alone, not to hide it from a source that already knows better.
 	Watch map[string]string
 	// Now overrides the clock (for tests).
-	Now time.Time
+	Now     time.Time
+	Context context.Context
 }
 
 func (o Options) now() time.Time {
@@ -158,9 +163,18 @@ func Scan(opts Options) *Result {
 	if res.Threshold < 1 {
 		res.Threshold = DefaultThreshold
 	}
-	socks, unreadable, warns := readSockets(opts)
-	res.Sockets, res.Unreadable, res.Warnings = len(socks), unreadable, warns
+	var socks []Socket
+	if runtime.GOOS != "linux" && (opts.ProcRoot == "" || opts.ProcRoot == "/proc") {
+		snapshot := readNativeSockets(opts)
+		socks, res.Warnings = snapshot.sockets, snapshot.warnings
+		res.Source, res.Coverage = snapshot.source, snapshot.coverage
+	} else {
+		socks, res.Unreadable, res.Warnings = readSockets(opts)
+	}
+	res.Sockets = len(socks)
+	var ownersTruncated bool
 	for _, s := range socks {
+		ownersTruncated = ownersTruncated || s.ownersTruncated
 		if s.PID > 0 {
 			res.Attributed++
 		}
@@ -171,10 +185,22 @@ func Scan(opts Options) *Result {
 			res.Established++
 		}
 	}
+	if ownersTruncated {
+		res.Warnings = append(res.Warnings, "shared socket holder limit reached; some process attribution is incomplete")
+	}
 
-	findings := detect(socks, opts)
-	findings = append(findings, resolverFindings(opts)...)
-	findings = append(findings, neighbourFindings(opts)...)
+	var findings []Finding
+	if res.Source == "" {
+		findings = detect(socks, opts)
+		findings = append(findings, resolverFindings(opts)...)
+		findings = append(findings, neighbourFindings(opts)...)
+	} else {
+		ctx := detectCtx{feed: opts.Intel, watch: opts.Watch, native: true}
+		for _, socket := range socks {
+			findings = append(findings, socketFindings(socket, ctx)...)
+		}
+		findings = append(findings, sweepFindings(socks)...)
+	}
 	if opts.History != nil {
 		findings = append(findings, opts.History.observe(socks, opts.now())...)
 	}

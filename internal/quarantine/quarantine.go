@@ -28,6 +28,7 @@
 package quarantine
 
 import (
+	"bytes"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
@@ -74,6 +75,9 @@ var (
 	ErrExists = errors.New("quarantine: destination already exists")
 	// ErrTooLarge is returned when a file exceeds maxEntrySize.
 	ErrTooLarge = errors.New("quarantine: file exceeds the entry size cap")
+	// ErrSafeRemovalUnavailable means the platform can keep a vault copy
+	// but has no backend that can remove the verified file safely.
+	ErrSafeRemovalUnavailable = errors.New("quarantine: safe original removal is unavailable on this platform")
 	// ErrPathChanged is returned when the path no longer names the file whose
 	// bytes were read into the vault. Nothing is unlinked: the bytes stored came
 	// from one file and the name now points at another, so removing it would
@@ -175,6 +179,19 @@ func (s *Store) Dir() string { return s.dir }
 // reached through a link is quarantined as that file and the entry records it,
 // rather than refused and left in place.
 func (s *Store) Quarantine(path, threatName string, keepOriginal bool) (Entry, error) {
+	return s.quarantine(path, threatName, keepOriginal, "")
+}
+
+// QuarantineVerified moves the file only if the bytes read into the vault
+// match the SHA-256 from the detection that authorized the move.
+func (s *Store) QuarantineVerified(path, threatName, sha256 string) (Entry, error) {
+	if sha256 == "" {
+		return Entry{}, fmt.Errorf("quarantine: scan digest required")
+	}
+	return s.quarantine(path, threatName, false, sha256)
+}
+
+func (s *Store) quarantine(path, threatName string, keepOriginal bool, expectedSHA256 string) (Entry, error) {
 	abs, err := filepath.Abs(path)
 	if err != nil {
 		return Entry{}, fmt.Errorf("quarantine: resolve path: %w", err)
@@ -187,14 +204,32 @@ func (s *Store) Quarantine(path, threatName string, keepOriginal bool) (Entry, e
 	if err != nil {
 		return Entry{}, err
 	}
-	// The path is attacker-writable and this runs privileged: a link swapped in
-	// after an lstat would pull /etc/shadow into the vault. The open refuses it.
-	data, info, err := safefs.ReadFileNoFollow(abs, maxEntrySize)
+	source, err := openQuarantineSource(abs, !keepOriginal)
+	if err != nil {
+		return Entry{}, fmt.Errorf("quarantine: open %s: %w", abs, err)
+	}
+	defer source.close()
+	info, err := source.file.Stat()
+	if err != nil {
+		return Entry{}, fmt.Errorf("quarantine: stat %s: %w", abs, err)
+	}
+	if !info.Mode().IsRegular() {
+		return Entry{}, fmt.Errorf("quarantine: %s: %w", abs, safefs.ErrNotRegular)
+	}
+	if info.Size() > maxEntrySize {
+		return Entry{}, ErrTooLarge
+	}
+	data, err := safefs.ReadAll(source.file, info, maxEntrySize)
 	if errors.Is(err, safefs.ErrTooLarge) {
 		return Entry{}, ErrTooLarge
 	}
 	if err != nil {
 		return Entry{}, fmt.Errorf("quarantine: read %s: %w", abs, err)
+	}
+	orig := sha256.Sum256(data)
+	digest := hex.EncodeToString(orig[:])
+	if expectedSHA256 != "" && digest != expectedSHA256 {
+		return Entry{}, fmt.Errorf("%w: %s differs from its scan digest", ErrPathChanged, abs)
 	}
 
 	id, err := randomHex(16)
@@ -206,11 +241,10 @@ func (s *Store) Quarantine(path, threatName string, keepOriginal bool) (Entry, e
 		return Entry{}, err
 	}
 
-	orig := sha256.Sum256(data)
 	masked := xorMask(data, key)
 	stored := sha256.Sum256(masked)
 
-	if err := writeFileAtomic(s.blobPath(id), masked, 0o600); err != nil {
+	if err := writeFileAtomic(s.blobPath(id), masked, 0o600, false); err != nil {
 		return Entry{}, fmt.Errorf("quarantine: write blob: %w", err)
 	}
 
@@ -220,7 +254,7 @@ func (s *Store) Quarantine(path, threatName string, keepOriginal bool) (Entry, e
 		ThreatName:    threatName,
 		Size:          int64(len(data)),
 		Mode:          info.Mode().Perm(),
-		SHA256:        hex.EncodeToString(orig[:]),
+		SHA256:        digest,
 		StoredSHA256:  hex.EncodeToString(stored[:]),
 		Key:           hex.EncodeToString(key),
 		QuarantinedAt: time.Now().UTC(),
@@ -233,7 +267,7 @@ func (s *Store) Quarantine(path, threatName string, keepOriginal bool) (Entry, e
 	}
 
 	if !keepOriginal {
-		if err := removeOriginal(abs, info, int64(len(data))); err != nil {
+		if err := removeOriginal(source, info, int64(len(data)), orig); err != nil {
 			// The vault copy is committed; report the removal failure so the
 			// operator knows the live copy is still there, but do not unwind
 			// the vault entry (that would lose the only integrity-checked copy).
@@ -243,39 +277,9 @@ func (s *Store) Quarantine(path, threatName string, keepOriginal bool) (Entry, e
 	return e, nil
 }
 
-// removeOriginal unlinks the file at abs, but only after the path has been shown
-// to still name the bytes that were read. The read went through a descriptor a
-// swap could not reach and that descriptor is already closed, so removing the
-// path on the strength of that read alone can unlink a different file an
-// attacker put there in between: the response runs privileged over directories
-// anyone can write to. The identity check is what refuses; the descriptor-
-// relative unlink underneath is what keeps a swapped-in symlink from being
-// followed, because unlinkat removes the name and never its target.
-//
-// Both the check and the removal resolve against one descriptor for the
-// directory holding the name: the check is an lstat against that descriptor
-// and the removal is an unlinkat against it, so the two cannot disagree about
-// which directory they looked in, and a name swapped for a link in between is
-// removed as a link or left alone, never followed.
-//
-// It is a variable so a test can swap the path between Quarantine's read and its
-// unlink, the race this refuses, which cannot be arranged any other way.
-var removeOriginal = func(abs string, read os.FileInfo, size int64) error {
-	dir, base := filepath.Dir(abs), filepath.Base(abs)
-	root, err := os.OpenRoot(dir)
-	if err != nil {
-		return err
-	}
-	defer root.Close()
-	fi, err := root.Lstat(base)
-	if err != nil {
-		return err
-	}
-	if !sameFile(fi, read, size) {
-		return fmt.Errorf("%w: %s changed after it was read", ErrPathChanged, abs)
-	}
-	return root.Remove(base)
-}
+// removeOriginal is replaced by the integration test that changes the source
+// after the vault copy is committed.
+var removeOriginal = (*quarantineSource).remove
 
 // sameFile reports whether fi describes the file that was read: the same inode
 // on the same device, the size the read actually returned, and an untouched
@@ -287,6 +291,26 @@ func sameFile(fi, read os.FileInfo, size int64) bool {
 	}
 	return os.SameFile(fi, read) && fi.Size() == size && fi.ModTime().Equal(read.ModTime())
 }
+
+func verifySourceBytes(f *os.File, path string, size int64, digest [sha256.Size]byte) error {
+	hash := sha256.New()
+	n, err := io.Copy(hash, io.NewSectionReader(f, 0, size+1))
+	if err != nil {
+		return err
+	}
+	if n != size || !bytes.Equal(hash.Sum(nil), digest[:]) {
+		return fmt.Errorf("%w: %s changed before removal", ErrPathChanged, path)
+	}
+	return nil
+}
+
+// Some Unix platforms expose /etc through a system symlink.
+var osConfigPath = func() string {
+	if path, err := filepath.EvalSymlinks("/etc"); err == nil {
+		return path
+	}
+	return "/etc"
+}()
 
 // resolveQuarantinePath returns the path whose bytes the vault will store: the
 // path itself, or the file it names when the final component is a symlink.
@@ -305,20 +329,15 @@ func sameFile(fi, read os.FileInfo, size int64) bool {
 // a cron table, PAM stack or sudoers fragment is never moved out of /etc by
 // machine, however it was reached.
 func resolveQuarantinePath(abs string) (string, error) {
-	fi, err := os.Lstat(abs)
+	target, err := filepath.EvalSymlinks(abs)
 	if err != nil {
 		return "", fmt.Errorf("quarantine: resolve path: %w", err)
 	}
-	target := abs
-	if fi.Mode()&os.ModeSymlink != 0 {
-		target, err = filepath.EvalSymlinks(abs)
-		if err != nil {
-			return "", fmt.Errorf("quarantine: resolve link: %w", err)
+	for _, path := range []string{abs, target} {
+		if path == "/etc" || strings.HasPrefix(path, "/etc/") ||
+			path == osConfigPath || strings.HasPrefix(path, osConfigPath+string(os.PathSeparator)) {
+			return "", fmt.Errorf("quarantine: %s is system configuration, which stays an alert for a human", path)
 		}
-	}
-	clean := filepath.Clean(target)
-	if clean == "/etc" || strings.HasPrefix(clean, "/etc/") {
-		return "", fmt.Errorf("quarantine: %s is system configuration, which is never quarantined: it stays an alert for a human", clean)
 	}
 	return target, nil
 }
@@ -340,19 +359,12 @@ func (s *Store) Restore(id, dest string, overwrite bool) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if !overwrite {
-		if _, err := os.Lstat(dest); err == nil {
-			return "", ErrExists
-		} else if !errors.Is(err, os.ErrNotExist) {
-			return "", fmt.Errorf("quarantine: stat dest: %w", err)
-		}
-	}
 	if dir := filepath.Dir(dest); dir != "" {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			return "", fmt.Errorf("quarantine: create dest dir: %w", err)
 		}
 	}
-	if err := writeFileAtomic(dest, data, e.Mode); err != nil {
+	if err := writeFileAtomic(dest, data, e.Mode, overwrite); err != nil {
 		return "", fmt.Errorf("quarantine: write restored file: %w", err)
 	}
 	return dest, nil
@@ -422,11 +434,14 @@ func (s *Store) Delete(id string) error {
 		if !found {
 			return ErrNotFound
 		}
-		if err := os.Remove(s.blobPath(id)); err != nil && !errors.Is(err, os.ErrNotExist) {
-			return fmt.Errorf("quarantine: remove blob: %w", err)
-		}
 		idx.Entries = kept
-		return s.writeIndex(idx)
+		if err := s.writeIndex(idx); err != nil {
+			return err
+		}
+		if err := os.Remove(s.blobPath(id)); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("quarantine: removed entry %s from the index but could not remove its blob: %w", id, err)
+		}
+		return nil
 	})
 }
 
@@ -436,12 +451,21 @@ func (s *Store) Delete(id string) error {
 // original bytes. It is the one place the integrity contract is enforced, so
 // Restore and Verify share exactly the same checks.
 func (s *Store) loadVerified(e Entry) ([]byte, error) {
-	masked, err := os.ReadFile(s.blobPath(e.ID))
+	if e.Size < 0 || e.Size > maxEntrySize {
+		return nil, fmt.Errorf("%w: invalid blob size for %s", ErrIntegrity, e.ID)
+	}
+	masked, _, err := safefs.ReadFileNoFollow(s.blobPath(e.ID), e.Size)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return nil, fmt.Errorf("%w: blob for %s is missing", ErrIntegrity, e.ID)
 		}
+		if errors.Is(err, safefs.ErrTooLarge) || errors.Is(err, safefs.ErrNotRegular) {
+			return nil, fmt.Errorf("%w: blob for %s is invalid: %w", ErrIntegrity, e.ID, err)
+		}
 		return nil, fmt.Errorf("quarantine: read blob: %w", err)
+	}
+	if int64(len(masked)) != e.Size {
+		return nil, fmt.Errorf("%w: blob size for %s does not match the index", ErrIntegrity, e.ID)
 	}
 	if got := sha256.Sum256(masked); hex.EncodeToString(got[:]) != e.StoredSHA256 {
 		return nil, fmt.Errorf("%w: stored blob for %s does not match recorded digest", ErrIntegrity, e.ID)
@@ -497,6 +521,15 @@ func (s *Store) readIndex() (*index, error) {
 	if idx.Version != indexVersion {
 		return nil, fmt.Errorf("quarantine: index version %d is not supported (want %d)", idx.Version, indexVersion)
 	}
+	for i, entry := range idx.Entries {
+		var id [16]byte
+		if len(entry.ID) != hex.EncodedLen(len(id)) {
+			return nil, fmt.Errorf("%w: index entry %d has an invalid blob ID", ErrIntegrity, i+1)
+		}
+		if _, err := hex.Decode(id[:], []byte(entry.ID)); err != nil {
+			return nil, fmt.Errorf("%w: index entry %d has an invalid blob ID", ErrIntegrity, i+1)
+		}
+	}
 	return &idx, nil
 }
 
@@ -506,12 +539,12 @@ func (s *Store) writeIndex(idx *index) error {
 	if err != nil {
 		return fmt.Errorf("quarantine: encode index: %w", err)
 	}
-	return writeFileAtomic(s.indexPath(), data, 0o600)
+	return writeFileAtomic(s.indexPath(), data, 0o600, true)
 }
 
-// writeFileAtomic writes data to path via a temp file in the same directory
-// and a rename, so a reader never sees a half-written file.
-func writeFileAtomic(path string, data []byte, mode os.FileMode) error {
+// writeFileAtomic publishes a complete file from a temp file on the same
+// filesystem. Linking the temp name installs it only when path is still free.
+func writeFileAtomic(path string, data []byte, mode os.FileMode, overwrite bool) error {
 	dir := filepath.Dir(path)
 	tmp, err := os.CreateTemp(dir, ".tmp-*")
 	if err != nil {
@@ -537,7 +570,14 @@ func writeFileAtomic(path string, data []byte, mode os.FileMode) error {
 	if err := tmp.Close(); err != nil {
 		return err
 	}
-	if err := os.Rename(tmpName, path); err != nil {
+	if overwrite {
+		if err := os.Rename(tmpName, path); err != nil {
+			return err
+		}
+	} else if err := os.Link(tmpName, path); err != nil {
+		if errors.Is(err, os.ErrExist) {
+			return ErrExists
+		}
 		return err
 	}
 	// Best-effort fsync of the directory so the rename itself is durable.

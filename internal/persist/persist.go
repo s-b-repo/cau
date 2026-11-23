@@ -17,12 +17,14 @@ package persist
 
 import (
 	"bufio"
+	"context"
 	"encoding/binary"
 	"errors"
 	"io/fs"
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -65,13 +67,14 @@ const (
 
 // Finding is one suspicious entry.
 type Finding struct {
-	Class     string `json:"class"`
-	Score     int    `json:"score"`
-	Technique string `json:"technique,omitempty"`
-	Path      string `json:"path"`
-	Line      int    `json:"line,omitempty"`
-	Detail    string `json:"detail"`
-	Evidence  string `json:"evidence,omitempty"`
+	Class      string `json:"class"`
+	Score      int    `json:"score"`
+	Technique  string `json:"technique,omitempty"`
+	Path       string `json:"path"`
+	Line       int    `json:"line,omitempty"`
+	Detail     string `json:"detail"`
+	Evidence   string `json:"evidence,omitempty"`
+	Executable string `json:"executable,omitempty"`
 }
 
 // Result is the audit outcome. Findings are sorted, highest score first.
@@ -80,6 +83,7 @@ type Result struct {
 	Checked   int       `json:"files_checked"`
 	Threshold int       `json:"threshold"`
 	Findings  []Finding `json:"findings,omitempty"`
+	Source    string    `json:"source,omitempty"`
 	// Incomplete names the paths the audit could not read. A missing path is
 	// not one: most audited paths exist only on hosts that use them, and their
 	// absence is the documented skip. A path listed here was found but not
@@ -104,6 +108,7 @@ type Options struct {
 	// image audits a suspect disk from a clean host.
 	Root      string
 	Threshold int
+	Context   context.Context
 }
 
 // audit is shared by every check, which all run at once. mu guards the three
@@ -134,13 +139,16 @@ func (a *audit) noteUnreadable(rel string) {
 
 // Scan runs every check.
 func Scan(opts Options) *Result {
-	a := &audit{root: opts.Root, maxWalk: maxWalk, links: map[string]bool{}, unreadable: map[string]bool{}}
-	if a.root == "" {
-		a.root = "/"
-	}
 	th := opts.Threshold
 	if th <= 0 {
 		th = DefaultThreshold
+	}
+	if runtime.GOOS != "linux" && (opts.Root == "" || opts.Root == "/") {
+		return scanDesktop(opts, th)
+	}
+	a := &audit{root: opts.Root, maxWalk: maxWalk, links: map[string]bool{}, unreadable: map[string]bool{}}
+	if a.root == "" {
+		a.root = "/"
 	}
 	// The accounts come first because the checks of what they own read them.
 	// After that no check depends on another, so each runs on its own.
@@ -165,29 +173,32 @@ func Scan(opts Options) *Result {
 		a.checkCapabilities,
 	)
 
-	sort.SliceStable(a.out, func(i, j int) bool {
-		if a.out[i].Score != a.out[j].Score {
-			return a.out[i].Score > a.out[j].Score
-		}
-		if a.out[i].Path != a.out[j].Path {
-			return a.out[i].Path < a.out[j].Path
-		}
-		if a.out[i].Line != a.out[j].Line {
-			return a.out[i].Line < a.out[j].Line
-		}
-		// The checks finish in any order, so the report's order can't rest on it.
-		if a.out[i].Class != a.out[j].Class {
-			return a.out[i].Class < a.out[j].Class
-		}
-		return a.out[i].Evidence < a.out[j].Evidence
-	})
-
+	sortFindings(a.out)
 	var incomplete []string
 	for rel := range a.unreadable {
 		incomplete = append(incomplete, rel)
 	}
 	sort.Strings(incomplete)
 	return &Result{Root: a.root, Checked: a.checked, Threshold: th, Findings: a.out, Incomplete: incomplete}
+}
+
+func sortFindings(findings []Finding) {
+	sort.SliceStable(findings, func(i, j int) bool {
+		if findings[i].Score != findings[j].Score {
+			return findings[i].Score > findings[j].Score
+		}
+		if findings[i].Path != findings[j].Path {
+			return findings[i].Path < findings[j].Path
+		}
+		if findings[i].Line != findings[j].Line {
+			return findings[i].Line < findings[j].Line
+		}
+		// The checks finish in any order, so the report's order can't rest on it.
+		if findings[i].Class != findings[j].Class {
+			return findings[i].Class < findings[j].Class
+		}
+		return findings[i].Evidence < findings[j].Evidence
+	})
 }
 
 // read returns a regular file's lines, or nil when it is missing, unreadable, or

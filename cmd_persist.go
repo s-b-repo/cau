@@ -1,9 +1,13 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"io"
+	"os"
+	"os/signal"
+	"syscall"
 
 	"github.com/s-b-repo/cau/internal/persist"
 	"github.com/s-b-repo/cau/internal/report"
@@ -12,8 +16,9 @@ import (
 func persistUsage(w io.Writer) {
 	fmt.Fprint(w, `Usage: cau persist [flags]
 
-Audit a Linux host for persistence: what will run after the next reboot or
-login, and the accounts and privileges that let an attacker back in. Read-only:
+Audit a host for persistence. macOS inspects LaunchAgents and LaunchDaemons.
+Windows inspects Run and RunOnce entries, services and scheduled tasks. The Linux
+audit also examines accounts, privileges and other startup files. Read-only:
 it reports and never edits a file, because the line it would remove may be the
 only evidence of the intrusion.
 
@@ -61,7 +66,9 @@ func cmdPersist(args []string, stdout, stderr io.Writer) int {
 		return fail(stderr, report.ExitUsage, "--threshold must be at least 1")
 	}
 
-	res := persist.Scan(persist.Options{Root: *root, Threshold: *threshold})
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM) // audit:ok standalone CLI context cancelled by signals
+	defer stop()
+	res := persist.Scan(persist.Options{Root: *root, Threshold: *threshold, Context: ctx})
 	flagged := res.Flagged()
 
 	if *format == "json" {
@@ -73,7 +80,12 @@ func cmdPersist(args []string, stdout, stderr io.Writer) int {
 		if *all {
 			shown = res.Findings
 		}
-		fmt.Fprintf(stdout, "Files checked : %d\nDetections    : %d\nObservations  : %d\n", res.Checked, len(flagged), len(res.Findings)-len(flagged))
+		if res.Source != "" {
+			fmt.Fprintf(stdout, "Provider      : %s\nEntries checked : %d\n", res.Source, res.Checked)
+		} else {
+			fmt.Fprintf(stdout, "Files checked : %d\n", res.Checked)
+		}
+		fmt.Fprintf(stdout, "Detections    : %d\nObservations  : %d\n", len(flagged), len(res.Findings)-len(flagged))
 		for _, f := range shown {
 			where := f.Path
 			if f.Line > 0 {

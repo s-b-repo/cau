@@ -226,6 +226,26 @@ func TestSharedHoldersAreBounded(t *testing.T) {
 	if len(socks) != 1 || len(socks[0].SharedWith) != maxSharedHolders {
 		t.Errorf("the holder list is bounded: %d holders on one row", len(socks[0].SharedWith))
 	}
+	if !socks[0].ownersTruncated {
+		t.Fatal("the holder limit must mark incomplete attribution")
+	}
+}
+
+func TestSharedSocketScoresEachHoldersOwnProcessState(t *testing.T) {
+	f := newFakeProc(t)
+	f.proc(100, "nginx", "/usr/sbin/nginx", "ns1", "5001")
+	f.proc(200, "nc", "/usr/bin/nc", "ns1", "5001")
+	f.sock("ns1", "tcp", hexEP(t, "0.0.0.0", 4444), hexEP(t, "0.0.0.0", 0), "0A", "5001")
+	res := Scan(Options{ProcRoot: f.build(), EtcRoot: t.TempDir()})
+	if res.Sockets != 1 || res.Attributed != 1 {
+		t.Fatalf("inventory must count one kernel socket: %+v", res)
+	}
+	for _, finding := range res.Flagged {
+		if finding.Class == "netscan.listen.relay-tool" && finding.PID == 200 {
+			return
+		}
+	}
+	t.Fatalf("no process-specific finding for the second holder: %+v", res.Flagged)
 }
 
 // ── beacon tracks are per process ───────────────────────────────────────────

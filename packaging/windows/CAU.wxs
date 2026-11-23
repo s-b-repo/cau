@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+  <Package Name="CAU EDR" Manufacturer="CAU" Version="$(var.ProductVersion)" InstallerVersion="500"
+           UpgradeCode="7D182D73-AB9D-4804-88B3-5CEE5E3C004D" Scope="perMachine">
+    <MajorUpgrade Schedule="afterInstallInitialize" AllowSameVersionUpgrades="yes"
+                  DowngradeErrorMessage="A newer version of CAU EDR is already installed." />
+    <MediaTemplate EmbedCab="yes" />
+    <StandardDirectory Id="ProgramFiles64Folder">
+      <Directory Id="INSTALLFOLDER" Name="CAU">
+        <Component Id="Engine" Guid="*">
+          <File Id="EngineExe" Source="$(var.Payload)/cau.exe" KeyPath="yes" />
+          <ServiceInstall Id="DefendService" Name="CauDefend" DisplayName="CAU Defender"
+                          Description="CAU endpoint detection and response"
+                          Type="ownProcess" Start="auto" ErrorControl="normal"
+                          Arguments="--windows-service &quot;[INSTALLFOLDER]Logs&quot; --report-only" />
+          <ServiceControl Id="DefendLifecycle" Name="CauDefend" Start="install" Stop="both" Remove="uninstall" Wait="yes" />
+        </Component>
+        <Component Id="MCP" Guid="*">
+          <File Source="$(var.Payload)/cau-mcp.exe" />
+        </Component>
+        <Component Id="License" Guid="*">
+          <File Source="$(var.Payload)/LICENSE" />
+        </Component>
+        <Directory Id="Rules" Name="rules">
+          <Component Id="RulesFile" Guid="*">
+            <File Source="$(var.Payload)/rules/rule_list.yar" />
+          </Component>
+        </Directory>
+        <Directory Id="Signatures" Name="signatures">
+          <Component Id="HashesFile" Guid="*">
+            <File Source="$(var.Payload)/signatures/hashes.txt" />
+          </Component>
+          <Component Id="FuzzyFile" Guid="*">
+            <File Source="$(var.Payload)/signatures/fuzzy.txt" />
+          </Component>
+        </Directory>
+        <Directory Id="ServiceLogs" Name="Logs">
+          <Component Id="LogDirectory" Guid="D4CD6A9D-FA48-45FC-BEDC-81A1258787FC">
+            <CreateFolder />
+          </Component>
+        </Directory>
+      </Directory>
+    </StandardDirectory>
+    <Feature Id="CAU" Title="CAU EDR" Level="1">
+      <ComponentRef Id="Engine" />
+      <ComponentRef Id="MCP" />
+      <ComponentRef Id="License" />
+      <ComponentRef Id="RulesFile" />
+      <ComponentRef Id="HashesFile" />
+      <ComponentRef Id="FuzzyFile" />
+      <ComponentRef Id="LogDirectory" />
+    </Feature>
+  </Package>
+</Wix>

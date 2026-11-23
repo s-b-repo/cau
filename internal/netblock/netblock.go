@@ -31,9 +31,11 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/netip"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"sync"
@@ -52,6 +54,10 @@ const (
 	BackendNFT Backend = "nftables"
 	// BackendIPTables is the legacy tool, used when nft is absent.
 	BackendIPTables Backend = "iptables"
+	// BackendWFP owns temporary Windows filters through a dynamic session.
+	BackendWFP Backend = "wfp"
+	// BackendPF owns a dedicated macOS Packet Filter anchor via launchd.
+	BackendPF Backend = "pf"
 	// BackendNone means neither is installed: nothing can be blocked, and the
 	// caller is told so instead of being told a block succeeded.
 	BackendNone Backend = "none"
@@ -119,6 +125,7 @@ type Blocker struct {
 	// takes the xtables lock with -w, and the kernel serialises nft transactions.
 	mu       sync.Mutex
 	commands []string
+	leases   peerLeases
 }
 
 // Open discovers a backend and makes sure this package's own table or chains
@@ -154,11 +161,49 @@ func Open(o Options) (*Blocker, error) {
 		return b, b.nftEnsure()
 	case BackendIPTables:
 		return b, b.iptEnsure()
+	case BackendWFP:
+		if o.Sever || o.TTL <= 0 {
+			return nil, errors.New("Windows Filtering Platform needs a positive block lifetime and does not support --sever")
+		}
+		if o.DryRun {
+			return b, nil
+		}
+		if err := b.checkWindowsPeers(""); err != nil {
+			return nil, err
+		}
+		session, err := openWFP()
+		if err != nil {
+			return nil, err
+		}
+		b.leases = newFilterLeases(session)
+		return b, nil
+	case BackendPF:
+		if o.Sever || o.TTL <= 0 || o.TTL > pfMaxLifetime {
+			return nil, errors.New("macOS PF requires a positive block lifetime of at most 24 hours and does not support --sever")
+		}
+		if o.DryRun {
+			return b, nil
+		}
+		session, protected, err := openPF()
+		if err != nil {
+			return nil, err
+		}
+		b.leases = session
+		for _, peer := range protected {
+			b.protect[peer] = true
+		}
+		return b, nil
 	}
 	return b, fmt.Errorf("no firewall backend: neither nft nor iptables is installed, so nothing can be blocked")
 }
 
 func (b *Blocker) discover() Backend {
+	if runtime.GOOS == "windows" {
+		return BackendWFP
+	}
+	if runtime.GOOS == "darwin" {
+		return BackendPF
+	}
 	if _, err := b.opts.Look("nft"); err == nil {
 		return BackendNFT
 	}
@@ -166,6 +211,22 @@ func (b *Blocker) discover() Backend {
 		return BackendIPTables
 	}
 	return BackendNone
+}
+
+func (b *Blocker) checkWindowsPeers(target string) error {
+	protected, err := windowsProtectedAddresses()
+	if err != nil {
+		return err
+	}
+	for _, peer := range protected {
+		if target == peer {
+			return fmt.Errorf("%w: %s is this host's own address, gateway or resolver", ErrProtected, target)
+		}
+		if target == "" {
+			b.protect[peer] = true
+		}
+	}
+	return nil
 }
 
 // Backend reports which firewall is in use.
@@ -251,11 +312,29 @@ func (b *Blocker) Block(addr, reason string) (string, error) {
 		return "", fmt.Errorf("no firewall backend: %s was not blocked", ip)
 	}
 	var err error
+	expires := b.expiry()
 	switch b.backend {
 	case BackendNFT:
 		err = b.nftBlock(ip)
 	case BackendIPTables:
 		err = b.iptBlock(ip)
+	case BackendWFP:
+		if b.opts.DryRun {
+			b.note("Windows Filtering Platform: add inbound and outbound transport filters for " + ip.String())
+		} else {
+			if err := b.checkWindowsPeers(ip.String()); err != nil {
+				return "", err
+			}
+			entry, blockErr := b.leases.block(netip.AddrFrom16([16]byte(ip.To16())).Unmap(), reason, b.TTL())
+			expires, err = entry.Expires, blockErr
+		}
+	case BackendPF:
+		if b.opts.DryRun {
+			b.note("macOS Packet Filter: lease inbound and outbound rules in " + pfAnchor + " for " + ip.String())
+		} else {
+			entry, blockErr := b.leases.block(netip.AddrFrom16([16]byte(ip.To16())).Unmap(), reason, b.TTL())
+			expires, err = entry.Expires, blockErr
+		}
 	}
 	if err != nil {
 		return "", err
@@ -264,7 +343,7 @@ func (b *Blocker) Block(addr, reason string) (string, error) {
 	if b.opts.Sever {
 		severed = b.sever(ip) == nil
 	}
-	b.record(Entry{Addr: ip.String(), Expires: b.expiry(), Reason: reason, Severed: severed})
+	b.record(Entry{Addr: ip.String(), Expires: expires, Reason: reason, Severed: severed})
 
 	what := "dropping traffic to and from " + ip.String()
 	if b.opts.DryRun {
@@ -292,6 +371,18 @@ func (b *Blocker) Unblock(addr string) error {
 		return b.nftUnblock(ip)
 	case BackendIPTables:
 		return b.iptUnblock(ip)
+	case BackendWFP:
+		if b.opts.DryRun {
+			b.note("Windows Filtering Platform: release peer filters for " + ip.String())
+			return nil
+		}
+		return b.leases.remove(netip.AddrFrom16([16]byte(ip.To16())).Unmap())
+	case BackendPF:
+		if b.opts.DryRun {
+			b.note("macOS Packet Filter: release the peer lease for " + ip.String())
+			return nil
+		}
+		return b.leases.remove(netip.AddrFrom16([16]byte(ip.To16())).Unmap())
 	}
 	return fmt.Errorf("no firewall backend")
 }
@@ -305,6 +396,11 @@ func (b *Blocker) List() ([]Entry, error) {
 		entries, err = b.nftList()
 	case BackendIPTables:
 		entries, err = b.iptList()
+	case BackendWFP, BackendPF:
+		if b.opts.DryRun {
+			return []Entry{}, nil
+		}
+		return b.leases.list()
 	default:
 		return nil, fmt.Errorf("no firewall backend")
 	}
@@ -329,14 +425,31 @@ func (b *Blocker) Clear() error {
 		return b.nftClear()
 	case BackendIPTables:
 		return b.iptClear()
+	case BackendWFP, BackendPF:
+		if b.opts.DryRun && b.backend == BackendPF {
+			b.note("macOS Packet Filter: clear the CAU-owned anchor " + pfAnchor)
+		}
+		return b.Close()
 	}
 	return fmt.Errorf("no firewall backend")
+}
+
+// Close releases all filters owned by a dynamic session. Linux firewall
+// backends keep their existing independent firewalls and timeout behavior.
+func (b *Blocker) Close() error {
+	if b.leases == nil {
+		return nil
+	}
+	return b.leases.close()
 }
 
 // Expire releases blocks whose lifetime has passed. nftables does this itself,
 // so there it is a no-op; the iptables fallback needs a caller to come back,
 // which the defend daemon does on its network tick.
 func (b *Blocker) Expire() (int, error) {
+	if b.leases != nil {
+		return 0, b.leases.expiryError()
+	}
 	if b.backend != BackendIPTables {
 		return 0, nil
 	}

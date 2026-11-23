@@ -1,6 +1,7 @@
 package netscan
 
 import (
+	"context"
 	"errors"
 	"net/netip"
 	"os"
@@ -44,14 +45,23 @@ type DNSPosture struct {
 	Policy        *DNSPolicyCheck    `json:"policy,omitempty"`
 }
 
-func UnsupportedDNSPosture() DNSPosture {
-	return DNSPosture{
-		SchemaVersion: "1", ObservedAt: time.Now().UTC(), Stub: "unknown",
-		Client: DNSResolverSource{
-			Path: "/etc/resolv.conf", Status: "unsupported",
-			Reason: "the resolver configuration provider requires Linux", Nameservers: []string{},
-		},
+// ReadHostDNSPosture reads the native client's configured resolver addresses.
+func ReadHostDNSPosture(ctx context.Context) DNSPosture {
+	return readHostDNS(ctx)
+}
+
+func nativeDNSPosture(client DNSResolverSource) DNSPosture {
+	stub := "unknown"
+	if client.Status == dnsComplete {
+		stub = "none_observed"
 	}
+	for _, server := range client.Nameservers {
+		if netip.MustParseAddr(server).IsLoopback() {
+			stub = "loopback_address_configured"
+			break
+		}
+	}
+	return DNSPosture{SchemaVersion: "1", ObservedAt: time.Now().UTC(), Client: client, Stub: stub}
 }
 
 // ReadDNSPosture reads resolver declarations. The systemd-resolved flat

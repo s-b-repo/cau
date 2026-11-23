@@ -17,12 +17,12 @@ func TestCapabilitiesPlatformMatrix(t *testing.T) {
 	tests := []struct {
 		os                        string
 		watch, inventory, patches string
-		service                   string
+		service, dns, posture     string
 	}{
-		{"linux", "inotify", "system-package-databases", "apt-upgrade-simulation", "systemd"},
-		{"windows", "none", "machine-uninstall-registry", "windows-update-agent-cache", "none"},
-		{"darwin", "none", "installer-receipts-and-app-bundles", "none", "none"},
-		{"freebsd", "none", "none", "none", "none"},
+		{"linux", "inotify", "system-package-databases", "apt-upgrade-simulation", "systemd", "resolv-conf", "none"},
+		{"windows", "read-directory-changes", "machine-uninstall-registry", "windows-update-agent-cache", "windows-scm", "windows-dns-client", "windows-firewall-and-bitlocker"},
+		{"darwin", "fsevents", "installer-receipts-and-app-bundles", "macos-softwareupdate", "launchd", "system-configuration", "application-firewall-and-filevault"},
+		{"freebsd", "none", "none", "none", "none", "none", "none"},
 	}
 	for _, test := range tests {
 		t.Run(test.os, func(t *testing.T) {
@@ -33,10 +33,24 @@ func TestCapabilitiesPlatformMatrix(t *testing.T) {
 			want := map[string]string{
 				"scan": "cau-scan", "quarantine_restore": "cau-vault", "file_watch": test.watch,
 				"software_inventory": test.inventory, "patch_assessment": test.patches, "service_health": test.service,
-				"kernel_integrity": "none",
+				"kernel_integrity": "none", "dns_configuration": test.dns, "endpoint_posture": test.posture,
+				"process_scan": "none", "persistence_scan": "none", "connection_scan": "none", "network_response": "none",
+				"process_response": "none",
 			}
-			if test.os == "linux" {
+			switch test.os {
+			case "linux":
 				want["kernel_integrity"] = "cau-kernel"
+				want["process_scan"], want["persistence_scan"], want["connection_scan"] = "procfs", "linux-startup-and-accounts", "procfs"
+				want["network_response"] = "nftables-or-iptables"
+				want["process_response"] = "linux-signals"
+			case "windows":
+				want["process_scan"], want["persistence_scan"], want["connection_scan"] = "windows-cim-process", "windows-registry-and-services", "windows-nettcpip"
+				want["network_response"] = "wfp"
+				want["process_response"] = "windows-process-handle"
+			case "darwin":
+				want["process_scan"], want["persistence_scan"], want["connection_scan"] = "macos-ps", "macos-launchd-plists", "macos-lsof"
+				want["process_response"] = "macos-task-control"
+				want["network_response"] = "pf"
 			}
 			for _, item := range result.Capabilities {
 				p, ok := want[item.ID]
@@ -65,7 +79,7 @@ func TestCapabilitiesCLI(t *testing.T) {
 	if err := json.Unmarshal(stdout.Bytes(), &result); err != nil {
 		t.Fatal(err)
 	}
-	if result.SchemaVersion != "1" || result.OS != runtime.GOOS || result.Architecture != runtime.GOARCH || len(result.Capabilities) != 7 {
+	if result.SchemaVersion != "1" || result.OS != runtime.GOOS || result.Architecture != runtime.GOARCH || len(result.Capabilities) != 14 {
 		t.Fatalf("unexpected JSON report %+v", result)
 	}
 	stdout.Reset()

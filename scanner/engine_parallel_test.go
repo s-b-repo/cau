@@ -2,6 +2,7 @@ package scanner
 
 import (
 	"bytes"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -13,6 +14,32 @@ import (
 
 	"github.com/s-b-repo/cau/scanner/fusion"
 )
+
+func TestDirectoryVisitorReceivesResultsBeforeFullTreeIsScanned(t *testing.T) {
+	dir := t.TempDir()
+	const files = 32
+	for i := range files {
+		path := filepath.Join(dir, fmt.Sprintf("%02d", i))
+		if err := os.WriteFile(path, []byte("fixture"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var started atomic.Int32
+	engine := &Engine{Jobs: 2, Heuristics: true, beforeDetector: func(string) { started.Add(1) }}
+	visited := 0
+	engine.ScanDirectoryEach(dir, func(result ScanResult, h *HeuristicResult) {
+		if visited == 0 && started.Load() > 3 {
+			t.Errorf("%d files started before the first result, want at most 3", started.Load())
+		}
+		if want := fmt.Sprintf("%02d", visited); filepath.Base(result.FilePath) != want || h == nil {
+			t.Errorf("visit %d got %+v and heuristics %v, want %q and heuristics", visited, result, h, want)
+		}
+		visited++
+	})
+	if visited != files {
+		t.Fatalf("visited %d, want %d", visited, files)
+	}
+}
 
 func panicFixture(t *testing.T) string {
 	t.Helper()

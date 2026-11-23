@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"os/signal"
+	"runtime"
 	"strings"
 	"syscall"
 	"time"
@@ -22,17 +23,19 @@ func cmdPatches(args []string, stdout, stderr io.Writer) int {
 	fs.Usage = func() {
 		fmt.Fprint(stderr, `Usage: cau patches [flags]
 
-Report OS update and restart readiness from local evidence. On APT systems,
-list upgrades from an ordinary upgrade simulation using the cached indexes.
+Report OS update and restart readiness. Use --online on macOS to list updates
+available from Software Update.
 
 Flags:
   --format <fmt>  text or json (default text)
+  --online        query macOS Software Update over the network
 
 Exit codes: 0 complete assessment, 2 incomplete or unsupported, 3 output error,
 4 usage. Check the restart and metadata states separately.
 `)
 	}
 	format := fs.String("format", "text", "output format: text or json")
+	online := fs.Bool("online", false, "query macOS Software Update over the network")
 	if err := fs.Parse(interspersed(fs, args)); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return report.ExitOK
@@ -45,11 +48,18 @@ Exit codes: 0 complete assessment, 2 incomplete or unsupported, 3 output error,
 	if fs.NArg() != 0 {
 		return fail(stderr, report.ExitUsage, "patches accepts no positional arguments")
 	}
+	timeout := patches.Timeout
+	if *online {
+		if runtime.GOOS != "darwin" {
+			return fail(stderr, report.ExitUsage, "--online is available on macOS")
+		}
+		timeout = patches.OnlineTimeout
+	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM) // audit:ok standalone CLI root context, cancelled by signals
 	defer stop()
-	ctx, cancel := context.WithTimeout(ctx, patches.Timeout)
+	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	return writePatchAssessment(stdout, stderr, *format, patches.Assess(ctx))
+	return writePatchAssessment(stdout, stderr, *format, patches.Assess(ctx, *online))
 }
 
 func writePatchAssessment(stdout, stderr io.Writer, format string, result patches.Assessment) int {
@@ -77,6 +87,12 @@ func writePatchAssessment(stdout, stderr io.Writer, format string, result patche
 		for _, update := range result.Updates {
 			if update.Revision > 0 {
 				fmt.Fprintf(&text, "  %s revision %d\n", update.ID, update.Revision)
+			} else if update.InstalledVersion == "" && update.Architecture == "" {
+				fmt.Fprintf(&text, "  %s %s", report.TermSafe(update.ID), update.CandidateVersion)
+				if update.RequiresRestart {
+					fmt.Fprint(&text, " (requires restart after installation)")
+				}
+				fmt.Fprintln(&text)
 			} else {
 				fmt.Fprintf(&text, "  %s [%s] %s -> %s\n", update.ID, update.Architecture, update.InstalledVersion, update.CandidateVersion)
 			}

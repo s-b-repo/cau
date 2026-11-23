@@ -54,6 +54,9 @@ const (
 )
 
 func main() {
+	if code, handled := runService(os.Args[1:]); handled {
+		os.Exit(code)
+	}
 	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
 }
 
@@ -95,6 +98,7 @@ Usage:
   cau installed [flags]                audit installed-package maintainer scripts (dpkg/pacman) for tradecraft
   cau inventory [flags]                report registered system software from local package and installer records
   cau patches   [flags]                assess cached OS update and restart readiness
+  cau posture   [flags]                read firewall and disk encryption settings
   cau capabilities [flags]             report platform capability providers and support
   cau feed      <subcommand>           manage the abuse-intel feed (list/check/update; offline cache + opt-in fetch)
   cau intake    --format <fmt> [flags] ingest a threat-intel feed into the signature DB
@@ -190,6 +194,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return cmdInventory(args[1:], stdout, stderr)
 	case "patches":
 		return cmdPatches(args[1:], stdout, stderr)
+	case "posture":
+		return cmdPosture(args[1:], stdout, stderr)
 	case "capabilities":
 		return cmdCapabilities(args[1:], stdout, stderr)
 	case "intake":

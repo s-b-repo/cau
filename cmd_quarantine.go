@@ -299,7 +299,7 @@ func autoQuarantine(store, level string, results []scanner.ScanResult, status fu
 				return moved, err
 			}
 		}
-		if _, err := s.Quarantine(r.FilePath, reason, false); err != nil {
+		if _, err := s.QuarantineVerified(r.FilePath, reason, r.SHA256); err != nil {
 			status("[WARN] could not quarantine %s: %s", report.TermSafe(r.FilePath), report.TermSafe(err.Error()))
 			continue
 		}

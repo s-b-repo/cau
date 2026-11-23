@@ -1,0 +1,9 @@
+#!/bin/sh
+set -eu
+[ "${3:-/}" = / ] || exit 0
+
+/bin/launchctl bootstrap system /Library/LaunchDaemons/org.cau.defend.plist
+firewall=/Library/LaunchDaemons/org.cau.peer-blocks.plist
+if [ -f "$firewall" ] && [ ! -L "$firewall" ] && [ "$(/usr/bin/stat -f %u "$firewall")" = 0 ]; then
+    /bin/launchctl bootstrap system "$firewall"
+fi

@@ -1,7 +1,9 @@
 package main
 
 import (
+	"crypto/sha256"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -53,6 +55,36 @@ func TestCLIScanAutoQuarantine(t *testing.T) {
 	}
 	if len(entries) != 1 || entries[0].OriginalPath != mal {
 		t.Fatalf("unexpected vault contents: %+v", entries)
+	}
+}
+
+func TestAutoQuarantineRejectsContentChangedAfterScan(t *testing.T) {
+	work := t.TempDir()
+	path := filepath.Join(work, "file.bin")
+	replacement := []byte("replacement file")
+	if err := os.WriteFile(path, replacement, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	stale := scanner.ScanResult{
+		FilePath: path,
+		Verdict:  scanner.VerdictMalicious,
+		SHA256:   fmt.Sprintf("%x", sha256.Sum256([]byte("original content"))),
+	}
+	vault := filepath.Join(work, "vault")
+	var warning string
+	moved, err := autoQuarantine(vault, "malicious", []scanner.ScanResult{stale}, func(format string, args ...any) {
+		warning = fmt.Sprintf(format, args...)
+	})
+	if err != nil || moved != 0 || !strings.Contains(warning, "differs from its scan digest") {
+		t.Fatalf("quarantine moved %d files, got error %v and warning %q", moved, err, warning)
+	}
+	if got, err := os.ReadFile(path); err != nil || string(got) != string(replacement) {
+		t.Fatalf("replacement is %q, error %v", got, err)
+	}
+	code, out, stderr := runCLI(t, "quarantine", "list", "--store", vault, "--format", "json")
+	var entries []json.RawMessage
+	if err := json.Unmarshal([]byte(out), &entries); code != report.ExitOK || err != nil || len(entries) != 0 {
+		t.Fatalf("vault output %q, stderr %q, status %d, decode error %v", out, stderr, code, err)
 	}
 }
 

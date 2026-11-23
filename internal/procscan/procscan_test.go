@@ -6,6 +6,8 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/s-b-repo/cau/internal/intel"
 )
 
 func scoreHas(p Process, class string) bool {
@@ -15,6 +17,26 @@ func scoreHas(p Process, class string) bool {
 		}
 	}
 	return false
+}
+
+func TestScanReportsCommandLineFeedCandidateLimit(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, "4242")
+	if err := os.Mkdir(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cmdline := "reader\x00" + strings.Repeat("http://example\x00", 4100)
+	if err := os.WriteFile(filepath.Join(dir, "cmdline"), []byte(cmdline), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	feed, err := intel.Parse(strings.NewReader("domain|listed.example|fixture\n"), "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	result := Scan(Options{ProcRoot: root, Intel: feed})
+	if !strings.Contains(strings.Join(result.Warnings, "\n"), "partial scan: PID 4242 reached the command-line feed candidate limit") {
+		t.Fatalf("missing candidate limit warning: %v", result.Warnings)
+	}
 }
 
 func TestDetectMemfdFileless(t *testing.T) {

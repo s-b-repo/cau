@@ -1,12 +1,17 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"flag"
 	"fmt"
 	"io"
+	"os"
+	"os/signal"
 	"runtime"
 	"strings"
+	"syscall"
+	"time"
 
 	"github.com/s-b-repo/cau/internal/netscan"
 	"github.com/s-b-repo/cau/internal/report"
@@ -18,13 +23,13 @@ func cmdNetDNS(args []string, stdout, stderr io.Writer) int {
 	fs.Usage = func() {
 		fmt.Fprint(stderr, `Usage: cau net dns [flags]
 
-Read Linux resolver declarations and compare their addresses with an optional
+Read local resolver configuration and compare its addresses with an optional
 policy. This command reads local configuration and sends no DNS traffic.
 
 Flags:
   --format <fmt>   text or json (default text)
   --expect <ip>    expected nameserver address, repeat for multiple addresses
-  --scope <scope>  client or systemd-upstream (default client)
+  --scope <scope>  client or Linux systemd-upstream (default client)
   --etc-root <dir> override /etc (testing)
   --run-root <dir> override /run (testing)
 
@@ -58,10 +63,14 @@ Exit codes: 0 complete, 1 policy drift, 2 incomplete or unsupported,
 		return report.ExitUsage
 	}
 	var result netscan.DNSPosture
-	if runtime.GOOS == "linux" || (*etc != "" && *run != "") {
+	if (runtime.GOOS == "linux" && (*etc != "" || *run != "")) || (*etc != "" && *run != "") {
 		result = netscan.ReadDNSPosture(*etc, *run)
 	} else {
-		result = netscan.UnsupportedDNSPosture()
+		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM) // audit:ok standalone CLI context cancelled by signals
+		defer stop()
+		ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+		defer cancel()
+		result = netscan.ReadHostDNSPosture(ctx)
 	}
 	if len(expected) != 0 {
 		result.Compare(*scope, expected)

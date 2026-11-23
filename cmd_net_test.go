@@ -113,6 +113,17 @@ func TestNetCLIRefusesToBlockLoopback(t *testing.T) {
 	}
 }
 
+func TestNetCLIWindowsFilteringPlatformDryRun(t *testing.T) {
+	code, out, stderr := runCLI(t, "net", "block", "192.0.2.27", "--backend", "wfp", "--dry-run", "--block-ttl", "1m")
+	if code != report.ExitOK || !strings.Contains(out, "would drop traffic") || !strings.Contains(out, "Windows Filtering Platform") {
+		t.Fatalf("dry-run exit %d, stdout %q, stderr %q", code, out, stderr)
+	}
+	code, _, stderr = runCLI(t, "net", "--backend", "wfp", "--respond", "block")
+	if code != report.ExitUsage || !strings.Contains(stderr, "--interval") {
+		t.Fatalf("detached session exit %d, stderr %q", code, stderr)
+	}
+}
+
 func TestNetCLIWatchlistFromAFeed(t *testing.T) {
 	proc, etc := netCLIHost(t, "agent", "/opt/vendor/agent", "198.51.100.7", 443)
 	feed := filepath.Join(t.TempDir(), "feed.txt")

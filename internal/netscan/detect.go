@@ -11,6 +11,9 @@ import (
 	"github.com/s-b-repo/cau/internal/procscan"
 )
 
+// ClassWatchlistEgress identifies connections flagged through external intel.
+const ClassWatchlistEgress = "netscan.egress.watchlist"
+
 // handlerPorts are the default listen ports of the common reverse-shell and
 // implant handlers (Metasploit, the shell one-liners that circulate, a few
 // botnet families). A developer can bind any of them, so a handler port is
@@ -57,6 +60,7 @@ type detectCtx struct {
 	feed      *intel.Feed
 	resolvers map[string]bool
 	watch     map[string]string
+	native    bool
 }
 
 func detect(socks []Socket, opts Options) []Finding {
@@ -65,7 +69,7 @@ func detect(socks []Socket, opts Options) []Finding {
 		ctx.resolvers[r] = true
 	}
 	var out []Finding
-	for _, s := range socks {
+	for s := range socketsByHolder(socks) {
 		if isCapture(s.Proto) {
 			out = append(out, captureFindings(s)...)
 			continue
@@ -110,7 +114,7 @@ func socketFindings(s Socket, ctx detectCtx) []Finding {
 		}))
 	}
 
-	if talking && !loopbackPeer && ctx.feed != nil {
+	if !s.sharedOwner && talking && !loopbackPeer && ctx.feed != nil {
 		if hit, ok := ctx.feed.MatchHost(s.Remote.IP); ok {
 			label := hit.Label
 			if label == "" {
@@ -129,9 +133,9 @@ func socketFindings(s Socket, ctx detectCtx) []Finding {
 	// be reported on its own, because the identification did not come from this
 	// host's own guesswork — but it is not definitive here, since what the
 	// other source knows cannot be checked from here.
-	if why, ok := ctx.watch[s.Remote.IP]; ok && talking && !loopbackPeer {
+	if why, ok := ctx.watch[s.Remote.IP]; !s.sharedOwner && ok && talking && !loopbackPeer {
 		out = append(out, at(Finding{
-			Class: "netscan.egress.watchlist", Score: 6, Technique: techAppLayer,
+			Class: ClassWatchlistEgress, Score: 6, Technique: techAppLayer,
 			Detail: fmt.Sprintf("%s is connected to %s, an address already identified elsewhere: %s",
 				s.procName(), s.Remote.String(), truncate(why, 160)),
 			Evidence: s.Remote.String(), Peer: s.peerAddr(), Port: s.Remote.Port,
@@ -154,7 +158,7 @@ func socketFindings(s Socket, ctx detectCtx) []Finding {
 			Detail:   fmt.Sprintf("the interpreter %s is listening on %s", s.procName(), s.Local.String()),
 			Evidence: s.Comm + " " + s.Local.String(), Port: s.Local.Port,
 		}))
-	case listening && s.wildcard() && s.Exe != "" && !procscan.SystemPath(TrimDeleted(s.Exe)):
+	case !ctx.native && listening && s.wildcard() && s.Exe != "" && !procscan.SystemPath(TrimDeleted(s.Exe)):
 		out = append(out, at(Finding{
 			Class: "netscan.listen.nonsystem", Score: 3, Technique: techNonStdPort,
 			Detail:   fmt.Sprintf("%s, which no package installed, is listening on every address at %s", s.procName(), s.Local.String()),
@@ -185,7 +189,9 @@ func socketFindings(s Socket, ctx detectCtx) []Finding {
 		}))
 	}
 
-	out = append(out, dnsFindings(s, ctx, at)...)
+	if !ctx.native {
+		out = append(out, dnsFindings(s, ctx, at)...)
+	}
 	return out
 }
 
@@ -239,7 +245,7 @@ func sweepFindings(socks []Socket) []Finding {
 		exe, comm      string
 	}
 	by := map[int]*fan{}
-	for _, s := range socks {
+	for s := range socketsByHolder(socks) {
 		if isCapture(s.Proto) || s.PID == 0 || s.Remote.IP == "" || s.Remote.Port == 0 {
 			continue
 		}

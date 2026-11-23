@@ -99,6 +99,9 @@ type RespondOptions struct {
 // and why. It never touches PID 1, itself, or its own ancestors: stopping the
 // shell or supervisor that is running the responder would end the response.
 func Respond(res *Result, opts RespondOptions) []Response {
+	if res.Source != "" {
+		return respondDesktop(res, opts)
+	}
 	root := Options{ProcRoot: opts.ProcRoot}.procRoot()
 	send := opts.signal
 	if send == nil {
@@ -129,6 +132,43 @@ func Respond(res *Result, opts RespondOptions) []Response {
 		out = append(out, r)
 	}
 	return out
+}
+
+func respondDesktop(res *Result, opts RespondOptions) []Response {
+	protected, complete := desktopAncestors(res.nativeParents, os.Getpid())
+	var out []Response
+	for _, p := range res.Flagged {
+		response := Response{PID: p.PID, Comm: p.Comm, Action: opts.Action}
+		switch {
+		case (res.Source != "windows-cim-process" && res.Source != "macos-ps") || opts.Action != ActionKill:
+			response.Reason = "the desktop provider cannot apply this process action"
+		case !Confirmed(p, opts.MinScore):
+			response.Reason = "process findings did not meet the response threshold"
+		case p.PID <= 4 || protected[p.PID] || !complete:
+			response.Reason = "process is protected or responder ancestry is incomplete"
+		default:
+			if err := terminateDesktop(p); err != nil {
+				response.Reason = err.Error()
+			} else {
+				response.Applied = true
+			}
+		}
+		out = append(out, response)
+	}
+	return out
+}
+
+func desktopAncestors(parents map[int]int, pid int) (map[int]bool, bool) {
+	protected := make(map[int]bool)
+	for pid > 4 {
+		parent, found := parents[pid]
+		if !found || protected[pid] {
+			return protected, false
+		}
+		protected[pid] = true
+		pid = parent
+	}
+	return protected, true
 }
 
 // blockExe asks the kernel to refuse p's executable, unless that executable is

@@ -1,0 +1,23 @@
+#!/bin/sh
+set -eu
+[ "${3:-/}" = / ] || exit 0
+
+for path in '/Library/Application Support/CAU' /var/log/cau; do
+    if [ -L "$path" ] || { [ -e "$path" ] && [ ! -d "$path" ]; }; then
+        echo "CAU requires a real directory at $path" >&2
+        exit 1
+    fi
+    if [ -d "$path" ]; then
+        mode=$(/usr/bin/stat -f %Lp "$path")
+        if [ "$(/usr/bin/stat -f %u "$path")" != 0 ] || [ "$((0$mode & 022))" != 0 ]; then
+            echo "CAU requires a root-owned directory without group or world write access at $path" >&2
+            exit 1
+        fi
+    fi
+done
+
+for label in org.cau.defend org.cau.peer-blocks; do
+    if /bin/launchctl print "system/$label" >/dev/null 2>&1; then
+        /bin/launchctl bootout "system/$label"
+    fi
+done

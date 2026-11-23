@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>org.cau.peer-blocks</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Library/Application Support/CAU/cau</string>
+        <string>--macos-firewall-service</string>
+    </array>
+    <key>KeepAlive</key>
+    <true/>
+    <key>ThrottleInterval</key>
+    <integer>2</integer>
+    <key>StandardErrorPath</key>
+    <string>/var/log/cau/firewall.log</string>
+    <key>Umask</key>
+    <integer>63</integer>
+    <key>Sockets</key>
+    <dict>
+        <key>PeerBlocks</key>
+        <dict>
+            <key>SockFamily</key>
+            <string>Unix</string>
+            <key>SockPathName</key>
+            <string>/var/run/org.cau.peer-blocks.sock</string>
+            <key>SockPathMode</key>
+            <integer>384</integer>
+        </dict>
+    </dict>
+</dict>
+</plist>

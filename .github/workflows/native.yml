@@ -3,17 +3,22 @@ name: native engine
 on:
   pull_request:
   push:
-    branches: [main, beta]
+    branches: [main, beta, desktop-verification]
     tags: ['v*']
   schedule:
     - cron: '19 3 * * 2'
   workflow_dispatch:
+  workflow_call:
+    inputs:
+      release-version:
+        type: string
+        required: true
 
 permissions:
   contents: read
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ${{ github.workflow }}-native-engine-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
@@ -25,16 +30,16 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - {os: linux, arch: amd64, runner: ubuntu-24.04}
-          - {os: linux, arch: arm64, runner: ubuntu-24.04-arm}
           - {os: darwin, arch: arm64, runner: macos-15}
           - {os: darwin, arch: amd64, runner: macos-15-intel}
           - {os: windows, arch: amd64, runner: windows-2025}
+          - {os: windows, arch: arm64, runner: windows-11-arm}
     env:
       CGO_ENABLED: '1'
       GOTOOLCHAIN: local
       NATIVE_OS: ${{ matrix.os }}
       NATIVE_ARCH: ${{ matrix.arch }}
+      NATIVE_RELEASE_VERSION: ${{ inputs.release-version }} # audit:ok input passed as a job environment variable
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
@@ -52,30 +57,48 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends gcc pkg-config libyara-dev
-      - name: Install macOS libraries
+      - name: Build static macOS YARA and crypto libraries
         if: runner.os == 'macOS'
         shell: bash
-        run: brew install yara pkgconf
+        run: |
+          brew install autoconf automake libtool pkgconf openssl@3
+          prefix="$RUNNER_TEMP/cau-yara"
+          bash scripts/build-yara-macos.sh "$prefix"
+          echo "PKG_CONFIG_PATH=$prefix/lib/pkgconfig" >> "$GITHUB_ENV"
 
       - name: Set up Windows UCRT64
-        if: runner.os == 'Windows'
+        if: matrix.os == 'windows' && matrix.arch == 'amd64'
         uses: msys2/setup-msys2@66cd2cce69caa17b53920067426061ca1de3a884 # v2.32.0
         with:
           msystem: UCRT64
           path-type: inherit
           install: >-
-            autoconf automake bison curl file flex libtool make
+            autoconf automake bison curl file flex libtool make unzip zip
             mingw-w64-ucrt-x86_64-gcc
             mingw-w64-ucrt-x86_64-openssl
             mingw-w64-ucrt-x86_64-pkgconf
+      - name: Set up Windows CLANGARM64
+        if: matrix.os == 'windows' && matrix.arch == 'arm64'
+        uses: msys2/setup-msys2@66cd2cce69caa17b53920067426061ca1de3a884 # v2.32.0
+        with:
+          msystem: CLANGARM64
+          update: true
+          path-type: inherit
+          install: >-
+            autoconf automake bison curl file flex libtool make unzip zip
+            mingw-w64-clang-aarch64-clang
+            mingw-w64-clang-aarch64-llvm
+            mingw-w64-clang-aarch64-openssl
+            mingw-w64-clang-aarch64-pkgconf
       - name: Build pinned libyara for Windows
         if: runner.os == 'Windows'
         shell: msys2 {0}
         env:
-          YARA_VERSION: '4.5.8'
-          YARA_SHA256: c322414975ff6f701149856613afdcd92a7e6939c284c798ae3c85618197efaa
+          YARA_VERSION: '4.6.0'
+          YARA_SHA256: 61ab80084e3f83e1b73a95057058e2ae1db5f87f291e32654e191d410297f0e5
         run: |
           set -euo pipefail
+          source scripts/windows-toolchain.sh
           work=$(mktemp -d)
           trap 'rm -rf -- "$work"' EXIT
           cd "$work"
@@ -86,12 +109,15 @@ jobs:
           cd "yara-$YARA_VERSION"
           ./bootstrap.sh
           # Set the MinGW host explicitly because the build shell is MSYS.
-          CC=/ucrt64/bin/gcc ./configure --host="$(/ucrt64/bin/gcc -dumpmachine)" \
-            --prefix="$(cygpath -m /ucrt64)" --enable-static --disable-shared --with-crypto
+          # Autoconf probes the static crypto archive before YARA generates its .pc file.
+          CPPFLAGS="$("$PKG_CONFIG" --define-prefix --cflags libcrypto)" \
+            LIBS="$("$PKG_CONFIG" --define-prefix --static --libs libcrypto)" LDFLAGS=-static \
+            ./configure --host="$windows_host" --prefix="$windows_prefix" \
+            --enable-static --disable-shared --with-crypto --enable-macho --enable-dex
           make -j"$(nproc)"
           make install
-          test -f /ucrt64/lib/libyara.a
-          test "$(/ucrt64/bin/pkgconf --modversion yara)" = "$YARA_VERSION"
+          test -f "$MSYSTEM_PREFIX/lib/libyara.a"
+          test "$("$PKG_CONFIG" --modversion yara)" = "$YARA_VERSION"
 
       - name: Build and verify native executables on Linux and macOS
         if: runner.os != 'Windows'
@@ -102,6 +128,42 @@ jobs:
         shell: msys2 {0}
         run: bash scripts/native-smoke.sh
 
+      - name: Verify macOS package install, upgrade and uninstall
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          set -euo pipefail
+          payload=$(mktemp -d)
+          trap 'rm -rf -- "$payload"' EXIT
+          tar -xzf native-out/cau-*-darwin-*.tar.gz -C "$payload"
+          bash scripts/native-installer-smoke-macos.sh "$payload" "native-out/cau-0.0.2-darwin-$NATIVE_ARCH-unsigned.pkg"
+
+      - name: Verify Windows MSI install, upgrade and uninstall
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $tools = Join-Path $env:RUNNER_TEMP 'cau-wix'
+          dotnet tool install --tool-path $tools wix --version 6.0.2 --allow-roll-forward
+          if ($LASTEXITCODE -ne 0) { throw 'WiX installation failed' }
+          & (Join-Path $tools wix.exe) --version
+          if ($LASTEXITCODE -ne 0) { throw 'WiX could not run on the native host' }
+          $archive = @(Get-ChildItem native-out -Filter 'cau-*-windows-*.zip')
+          if ($archive.Count -ne 1) { throw 'Expected one Windows payload archive' }
+          $payload = Join-Path $env:RUNNER_TEMP 'cau-payload'
+          Expand-Archive -LiteralPath $archive[0].FullName -DestinationPath $payload
+          & ./scripts/native-installer-smoke.ps1 -Payload $payload -Arch $env:NATIVE_ARCH -Wix (Join-Path $tools wix.exe) -SaveInstaller "native-out/cau-0.0.2-windows-$env:NATIVE_ARCH-unsigned.msi"
+
+      - name: Save local installer verification artifacts
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: cau-unsigned-installer-${{ matrix.os }}-${{ matrix.arch }}
+          path: |
+            native-out/*-unsigned.pkg
+            native-out/*-unsigned.msi
+          if-no-files-found: error
+          retention-days: 7
+
       - name: Save native build evidence
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
@@ -109,3 +171,14 @@ jobs:
           name: cau-native-evidence-${{ matrix.os }}-${{ matrix.arch }}-${{ github.sha }}
           path: native-out/*.txt
           if-no-files-found: ignore
+
+      - name: Save verified desktop release archive
+        if: runner.os != 'Linux'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: cau-native-release-${{ matrix.os }}-${{ matrix.arch }}
+          path: |
+            native-out/cau-*-darwin-*.tar.gz
+            native-out/cau-*-windows-*.zip
+          if-no-files-found: error
+          retention-days: 7
