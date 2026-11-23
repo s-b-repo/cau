@@ -44,14 +44,21 @@ wait_for_service() {
     return 1
 }
 
+install_fixture() {
+    if ! sudo -n /usr/sbin/installer -dumplog -pkg "$1" -target /; then
+        sudo -n tail -100 /var/log/install.log >&2
+        return 1
+    fi
+}
+
 bash "$repo/scripts/build-macos-installer.sh" "$1" 0.0.1 "$work/older.pkg"
 bash "$repo/scripts/build-macos-installer.sh" "$1" 0.0.2 "$work/newer.pkg"
 assert_cau_inventory "$1"
-sudo -n /usr/sbin/installer -pkg "$work/older.pkg" -target /
+install_fixture "$work/older.pkg"
 wait_for_service
 assert_cau_inventory "$1" 0.0.1
 printf 'keep across upgrade\n' | sudo -n tee /var/log/cau/upgrade-fixture.txt
-sudo -n /usr/sbin/installer -pkg "$work/newer.pkg" -target /
+install_fixture "$work/newer.pkg"
 wait_for_service
 assert_cau_inventory "$1" 0.0.2
 sudo -n grep -Fq 'keep across upgrade' /var/log/cau/upgrade-fixture.txt

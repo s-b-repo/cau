@@ -10,7 +10,7 @@ import (
 )
 
 func TestDesktopProcessProviderSeesCurrentProcess(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), Timeout)
+	ctx, cancel := context.WithTimeout(context.Background(), QueryTimeout())
 	defer cancel()
 	result := Processes(ctx)
 	for _, row := range result.Rows {

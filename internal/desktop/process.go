@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -12,10 +13,18 @@ import (
 )
 
 const (
-	Timeout          = 15 * time.Second
 	maxProcessRows   = 32768
 	maxCommandLength = 16384
 )
+
+// QueryTimeout bounds native process and socket collection.
+func QueryTimeout() time.Duration {
+	if runtime.GOOS == "windows" {
+		// Cold Windows PowerShell and CIM module discovery can exceed 15 seconds.
+		return 45 * time.Second
+	}
+	return 15 * time.Second
+}
 
 type Process struct {
 	PID     int    `json:"pid"`

@@ -18,6 +18,10 @@ done
 
 for label in org.cau.defend org.cau.peer-blocks; do
     if /bin/launchctl print "system/$label" >/dev/null 2>&1; then
-        /bin/launchctl bootout "system/$label"
+        if ! /bin/launchctl bootout system "/Library/LaunchDaemons/$label.plist" &&
+            /bin/launchctl print "system/$label" >/dev/null 2>&1; then
+            echo "Could not stop $label for upgrade" >&2
+            exit 1
+        fi
     fi
 done

@@ -18,7 +18,7 @@ func TestDesktopConnectionProviderSeesLoopbackListener(t *testing.T) {
 	}
 	defer listener.Close()
 	port := listener.Addr().(*net.TCPAddr).Port
-	ctx, cancel := context.WithTimeout(context.Background(), desktop.Timeout)
+	ctx, cancel := context.WithTimeout(context.Background(), desktop.QueryTimeout())
 	defer cancel()
 	snapshot := nativeConnections(ctx)
 	for _, row := range snapshot.sockets {

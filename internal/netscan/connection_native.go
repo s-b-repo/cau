@@ -25,7 +25,7 @@ func readNativeSockets(opts Options) connectionSnapshot {
 	if parent == nil {
 		parent = context.Background() // audit:ok compatibility for callers without a context, bounded below
 	}
-	ctx, cancel := context.WithTimeout(parent, desktop.Timeout)
+	ctx, cancel := context.WithTimeout(parent, desktop.QueryTimeout())
 	defer cancel()
 	return nativeConnections(ctx)
 }

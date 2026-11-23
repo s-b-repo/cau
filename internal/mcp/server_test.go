@@ -218,8 +218,12 @@ func TestYaraTestRuleMatches(t *testing.T) {
 		t.Fatal(err)
 	}
 	srv := testServer(t, root)
-	rule := `rule t { strings: $a = \"marker_xyz\" condition: $a }`
-	req := `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"yara_test_rule","arguments":{"rule":"` + rule + `","paths":["` + f + `"]}}}`
+	rule := `rule t { strings: $a = "marker_xyz" condition: $a }`
+	args, err := json.Marshal(map[string]any{"rule": rule, "paths": []string{f}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"yara_test_rule","arguments":` + string(args) + `}}`
 	resp := drive(t, srv, req)
 	var out struct {
 		Compiled bool `json:"compiled"`

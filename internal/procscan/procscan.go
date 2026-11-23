@@ -316,7 +316,7 @@ func scanDesktop(opts Options) *Result {
 	if parent == nil {
 		parent = context.Background() // audit:ok compatibility for callers without a context, bounded below
 	}
-	ctx, cancel := context.WithTimeout(parent, desktop.Timeout)
+	ctx, cancel := context.WithTimeout(parent, desktop.QueryTimeout())
 	defer cancel()
 	snapshot := desktop.Processes(ctx)
 	result := &Result{Source: snapshot.Source, Coverage: "command-line", Scanned: len(snapshot.Rows),
