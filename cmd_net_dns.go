@@ -11,8 +11,8 @@ import (
 	"runtime"
 	"strings"
 	"syscall"
-	"time"
 
+	"github.com/s-b-repo/cau/internal/desktop"
 	"github.com/s-b-repo/cau/internal/netscan"
 	"github.com/s-b-repo/cau/internal/report"
 )
@@ -68,7 +68,7 @@ Exit codes: 0 complete, 1 policy drift, 2 incomplete or unsupported,
 	} else {
 		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM) // audit:ok standalone CLI context cancelled by signals
 		defer stop()
-		ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+		ctx, cancel := context.WithTimeout(ctx, desktop.QueryTimeout())
 		defer cancel()
 		result = netscan.ReadHostDNSPosture(ctx)
 	}

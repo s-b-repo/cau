@@ -173,7 +173,10 @@ fi
     unset CAU_SIGNATURES CAU_RULES CAU_FUZZY
     "$installed/cau$ext" rules list > installed-rules.txt
     "$installed/cau$ext" scan --quiet --format json --file control.txt > installed-scan.json
-    "$installed/cau$ext" net dns --format json > dns.json
+    if ! "$installed/cau$ext" net dns --format json > dns.json; then
+        cat dns.json >&2
+        exit 1
+    fi
     posture_exit=0
     "$installed/cau$ext" posture --format json > posture.json || posture_exit=$?
     [[ $posture_exit == 0 || $posture_exit == 2 ]]

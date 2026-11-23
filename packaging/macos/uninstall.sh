@@ -22,10 +22,11 @@ for path in "$app" "$app/rules" "$app/signatures"; do
 done
 
 for label in org.cau.defend org.cau.peer-blocks; do
+    plist="/Library/LaunchDaemons/$label.plist"
     if /bin/launchctl print "system/$label" >/dev/null 2>&1; then
-        /bin/launchctl bootout "system/$label"
+        /bin/launchctl bootout system "$plist"
     fi
-    /bin/rm -f "/Library/LaunchDaemons/$label.plist"
+    /bin/rm -f "$plist"
 done
 /bin/rm -f "$app/cau" "$app/cau-mcp" "$app/LICENSE" "$app/org.cau.peer-blocks.plist" \
     "$app/rules/rule_list.yar" "$app/signatures/hashes.txt" "$app/signatures/fuzzy.txt" "$app/uninstall.sh"

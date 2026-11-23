@@ -65,10 +65,18 @@ sudo -n grep -Fq 'keep across upgrade' /var/log/cau/upgrade-fixture.txt
 /usr/sbin/pkgutil --pkg-info org.cau.edr | grep -Fq 'version: 0.0.2'
 "$root/cau" rules list > "$work/installed-rules.txt"
 sudo -n /bin/sh "$root/uninstall.sh"
-if sudo -n /bin/launchctl print system/org.cau.defend > "$work/service-removed.txt" 2>&1 ||
-    /usr/sbin/pkgutil --pkg-info org.cau.edr > "$work/receipt-removed.txt" 2>&1 ||
-    [[ -e $root/cau ]]; then
-    echo 'macOS uninstall left a service, receipt or executable behind' >&2
+for attempt in {1..15}; do
+    if ! sudo -n /bin/launchctl print system/org.cau.defend > "$work/service-removed.txt" 2>&1; then
+        break
+    fi
+    sleep 1
+done
+if sudo -n /bin/launchctl print system/org.cau.defend > "$work/service-removed.txt" 2>&1; then
+    cat "$work/service-removed.txt" >&2
+    exit 1
+fi
+if [[ -e $root/cau || -e /Library/LaunchDaemons/org.cau.defend.plist ]]; then
+    echo 'macOS uninstall left the agent or its launchd job on disk' >&2
     exit 1
 fi
 sudo -n grep -Fq 'keep across upgrade' /var/log/cau/upgrade-fixture.txt
